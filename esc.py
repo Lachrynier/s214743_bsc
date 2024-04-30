@@ -32,7 +32,7 @@ from cil.optimisation.operators import BlockOperator, GradientOperator,\
 from cil.optimisation.functions import IndicatorBox, MixedL21Norm, L2NormSquared, \
                                        BlockFunction, L1Norm, LeastSquares, \
                                        OperatorCompositionFunction, TotalVariation, \
-                                       ZeroFunction
+                                       ZeroFunction, SmoothMixedL21Norm
 
 from cil.io import NikonDataReader
 from cil.utilities.jupyter import islicer
@@ -63,6 +63,9 @@ from scipy.optimize import curve_fit
 from skimage.filters import threshold_otsu
 # from scipy.signal import convolve
 from scipy.ndimage import convolve1d
+
+from cil.optimisation.operators import CompositionOperator, FiniteDifferenceOperator, MatrixOperator
+from cil.framework import DataContainer
 
 def TV_2D(im):
     None
@@ -128,7 +131,8 @@ def clip_otsu_segment(recon, ig, clip=True, title=''):
     return segmented
 
 def testing():
-    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    # file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
     with open(file_path, 'rb') as file:
         data = pickle.load(file)
     ag = data.geometry
@@ -139,7 +143,7 @@ def testing():
     b = data.as_array()
     basis_params = [[1,0,5],[1,10,10],[1,10,20],[1,0,20],[1,20,20],[1,0,40],[1,0,100]]
     I_S = compute_scatter_basis(sino,basis_params)
-    proj = 500
+    proj = 1400
     detector_indices = np.arange(0,sino.shape[1],1)
 
     markersize=3
@@ -169,14 +173,163 @@ def testing():
     recon_corr = FDK(data_corr).run(verbose=0)
     # show2D(recon)
     # show2D(recon_corr)
-    show2D([recon,recon_corr])
+    show2D([recon,-recon_corr])
 
     clip_otsu_segment(recon, ig, clip=False)
     clip_otsu_segment(recon_corr, ig, clip=False)
     
     plt.hist(0.25*data.as_array().flatten(),bins=150)
     plt.hist(data_corr.as_array().flatten(),bins=150,fc=(0, 1, 0, 0.5))
+
+def asd1():
+    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    recon = FDK(data).run(verbose=0)
+    P = recon.as_array()
+    nx,ny = ig.shape
+
+    trans = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+    nc = len(basis_params)
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S = 0.05*I_S
+    I_Q = trans-I_S
+    s = b[None,:,:] + np.log(I_Q)
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = S.reshape(nc, nx*ny).T
+
+    op1 = MatrixOperator(Mext)
+    op2 = GradientOperator(ImageGeometry(voxel_num_x=nx,voxel_num_y=ny))
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+
+    c = DataContainer(np.array([1,0.1,0.1,0.1]))
+    w = K.direct(c)
+    v = F(w)
+
+    l = -np.inf*np.ones(1+nc)
+    l[0] = 0
+    u = np.inf*np.ones(1+nc)
+    u[0] = 0
+    G = IndicatorBox(lower=l,upper=u)
+    pdhg = PDHG(f=F, g=G, operator=K, initial=c)
+    pdhg.run(iterations=1)
+
+    fista = FISTA(f=F, g=G, operator=K, initial=c)
+
+    show2D(w[0]) # why is this so good?
+    show2D(np.sqrt(w[0]**2+w[1]**2))
+    show2D( np.sqrt(w[0]**2) + np.sqrt(w[1]**2) )
+    show2D(np.sqrt(np.sqrt(w[0]**2)))
+    show2D(w[0]>0.01)
     
+def asd2():
+    def fd_grad(func, x, h=1e-5):
+        n = len(x)
+        grad = np.zeros(n)
+        f_x = func(x)
+        for i in range(n):
+            x_plus_h = np.array(x)
+            x_plus_h[i] += h
+            f_x_plus_h = func(x_plus_h)
+            grad[i] = (f_x_plus_h - f_x) / h
+        return grad
+    
+    # file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    recon = FDK(data).run(verbose=0)
+    P = recon.as_array()
+    nx,ny = ig.shape
+
+    trans = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    basis_params = [[1,10,1],[1/2,10,2],[1/4,10,4]]
+    # basis_params = [[1,30,1],[1/2,30,2],[1/5,100,5]]
+    # basis_params = [[1,10,1],[1/10,10,1],[1/100,10,1]]
+    # basis_params = [[1/2,100,2]]
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+    # basis_params = [[1/40,0,40],[1/100,0,100],[1/200,0,200]]
+    # basis_params = [[1/40,0,40],[1/100,0,100],[1/200,0,200]]
+    # basis_params = [[1/40,0,40]]
+    nc = len(basis_params)
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S = 0.05*I_S
+    I_Q = trans-I_S
+    s = b[None,:,:] + np.log(I_Q)
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        show2D(-S[i])
+        # show2D(S[i])
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = - S.reshape(nc, nx*ny).T
+
+    op1 = MatrixOperator(Mext)
+    op2 = GradientOperator(ImageGeometry(voxel_num_x=nx,voxel_num_y=ny))
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    # F = SmoothMixedL21Norm(epsilon=1e-2)
+
+    # c = DataContainer(np.array([1,0.1,0.1,0.1]))
+    # w = K.direct(c)
+    # v = F(w)
+    def obj(x):
+        c = np.ones(1+nc)
+        c[1:] = x
+        data_c = DataContainer(c)
+        return F(K.direct(data_c))
+    
+    x0 = np.array([0.1,0.1,0.1])
+    # x0 = np.array([1,1,1])
+    # x0 = np.array([0.1])
+
+    l,u = -np.inf*np.ones(nc),np.zeros(nc)
+    # l,u = np.zeros(nc),np.ones(nc)*np.inf
+    bounds = sp.optimize.Bounds(lb=l, ub=u, keep_feasible=False)
+
+    n_angles,n_panel = s.shape[1:]
+    A = - s.reshape(nc, n_angles*n_panel).T
+    ubA = trans.flatten()
+    con = sp.optimize.LinearConstraint(A, ub=ubA)
+    options = {'maxiter': 10, 'disp': True}
+    def callback(x):
+        print("Current solution:", x)
+    
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, constraints=con, options=options, callback=callback)
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, constraints=con, options=options, callback=callback)
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, options=options, callback=callback)
+    res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, options=options, callback=callback)
+    c = np.ones(1+nc)
+    c[1:] = res.x
+    Q = Mext.dot(c).reshape((nx,ny))
+    show2D(Q)
+
+    q = trans - A.dot(res.x).reshape((n_angles,n_panel))
+    print(q.min())
+
+    fd_grad(obj,res.x)
+    # d = 1e-4
+    # d_vec = np.zeros(1+nc)
+    # d_vec[1] = d
+    # (obj(x0+d_vec)-obj(x0-d_vec))/(2*d)
+
 
 def ESC(basis_params, num_iter=50, delta=1/11, c_l=1):
     def compute_k(data,B,I,c,delta):

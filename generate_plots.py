@@ -1,7 +1,8 @@
 import sys
 sys.path.append('/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev/analysis/s214743_bsc')
 import sim_main
-from sim_main import fun_attenuation, generate_spectrum, generate_triangle_image
+from sim_main import fun_attenuation, generate_spectrum
+from sim_main import generate_triangle_image, create_circle_image, create_rings_image
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,6 +47,7 @@ from cil.utilities.noise import gaussian, poisson
 
 base_dir = os.path.abspath('/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev/analysis/s214743_bsc/')
 
+from skimage.filters import threshold_otsu
 
 def spectrum_penetration_plot():
     mu = fun_attenuation(plot=False)
@@ -439,3 +441,322 @@ def staircase_experiments():
 #     fig.suptitle(r'Mean energy of the X-ray spectrum as a function of the path length $d$')
 #     plt.savefig(os.path.join(base_dir, 'plots/mean_energy.pdf'))
 #     plt.show()
+
+
+
+
+########## bh
+def setup_generic_cil_geometry(physical_size, voxel_num, cell_to_im_ratio=1):
+### Set up CIL geometries
+    angles = np.linspace(start=0, stop=180, num=3*180//1, endpoint=False)
+    voxel_size = physical_size/voxel_num
+    ig = ImageGeometry(voxel_num_x=voxel_num, voxel_num_y=voxel_num, voxel_size_x=voxel_size, voxel_size_y=voxel_size, center_x=0, center_y=0)
+    
+    factor = cell_to_im_ratio
+    panel_num_cells = math.ceil(np.sqrt(2)*factor*voxel_num)
+    panel_cell_length = 1/factor * voxel_size
+    ag = AcquisitionGeometry.create_Parallel2D(ray_direction=[0,1], detector_position=[0,physical_size], detector_direction_x=[1,0], rotation_axis_position=[0,0])\
+        .set_panel(num_pixels=panel_num_cells,pixel_size=panel_cell_length)\
+        .set_angles(angles=angles)
+    return ag,ig
+def generate_bh_data(im, ag, ig):
+    mu = fun_attenuation(plot=False)
+    bin_centers, bin_heights = generate_spectrum(plot=False)
+    num_bins = bin_centers.size
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    d = A.direct(im)
+    d = d.as_array()
+    I = np.zeros(d.shape, dtype='float32')
+    I0 = 0
+    # print(d)
+    for i in range(num_bins):
+        E = bin_centers[i]
+        I0_E = bin_heights[i]
+        I0 += I0_E
+        I += I0_E * np.exp(-mu(E)*d)
+    
+    b = AcquisitionData(array=-np.log(I/I0), geometry=ag)
+    return b
+
+def bh_disk():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+    im_arr = create_circle_image(image_size=voxel_num, radius=voxel_num//2.5, center=[voxel_num//2, voxel_num//2])
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+############# Plotting
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(2, 1, height_ratios=[3, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 3
+    ax[0] = fig.add_subplot(top_row_gs[0, 0])
+    ax[1] = fig.add_subplot(top_row_gs[0, 1])
+    ax[2] = fig.add_subplot(gs[1])
+
+    plt.sca(ax[0])
+    plt.imshow(im_arr, origin='lower',cmap='grey')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Disk test image')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    plt.colorbar()
+
+    plt.sca(ax[2])
+    plt.plot(recon.as_array()[recon.shape[0]//2,:])
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={recon.shape[0]//2} on the reconstruction')
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.subplots_adjust(top=0.85)
+    # plt.savefig(os.path.join(base_dir, 'plots/bh_disk.pdf'))
+    plt.show()
+################
+
+def bh_rings():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+
+
+    im_arr = create_rings_image(size=voxel_num, spacing=40, ring_width=100, radius=voxel_num//3, center=[voxel_num//2, voxel_num//2])
+
+    # im1 = create_circle_image(image_size=voxel_num, radius=voxel_num//2.5, center=[voxel_num//2, voxel_num//2])
+    # im2 = create_circle_image(image_size=voxel_num, radius=voxel_num//3.5, center=[voxel_num//2, voxel_num//2])
+    # im_arr = im1-im2
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+############# Plotting
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(2, 1, height_ratios=[3, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 3
+    ax[0] = fig.add_subplot(top_row_gs[0, 0])
+    ax[1] = fig.add_subplot(top_row_gs[0, 1])
+    ax[2] = fig.add_subplot(gs[1])
+
+    plt.sca(ax[0])
+    plt.imshow(im_arr, origin='lower',cmap='grey')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Concentric rings test image')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    plt.colorbar()
+
+    plt.sca(ax[2])
+    plt.plot(recon.as_array()[recon.shape[0]//2,:])
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={recon.shape[0]//2} on the reconstruction')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)
+    plt.savefig(os.path.join(base_dir, 'plots/bh_rings.pdf'))
+    plt.show()
+    
+def bh_shapes():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_image_shapes3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+############# Plotting
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(3, 1, height_ratios=[3, 1, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 4
+    ax[0] = fig.add_subplot(top_row_gs[0, 0])
+    ax[1] = fig.add_subplot(top_row_gs[0, 1])
+    ax[2] = fig.add_subplot(gs[1])
+    ax[3] = fig.add_subplot(gs[2])
+
+
+    plt.sca(ax[0])
+    plt.imshow(im_arr, origin='lower',cmap='grey')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Shapes test image')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    plt.colorbar()
+
+    hori_idx = 650
+    plt.sca(ax[2])
+    # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    plt.plot(recon.as_array()[hori_idx,:]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx} on the reconstruction')
+    plt.grid(True)
+
+    plt.sca(ax[3])
+    plt.plot(im.as_array()[hori_idx,:]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx} on the original image')
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)
+    plt.savefig(os.path.join(base_dir, 'plots/bh_shapes.pdf'))
+    plt.show()
+
+def theoretical_bhc(physical_size,mono_E=None,num_samples=1000):
+    ###
+    mu = fun_attenuation(plot=False)
+    bin_centers, bin_heights = generate_spectrum(plot=False)
+    num_bins = bin_centers.size
+
+    O = {}
+    d_step_size = physical_size/num_samples
+    d = np.linspace(0, physical_size, num_samples)
+    I = np.zeros(d.shape, dtype='float64')
+    I0 = 0
+    for i in range(num_bins):
+        E = bin_centers[i]
+        I0_E = bin_heights[i]
+        I0 += I0_E
+        I += I0_E * np.exp(-mu(E)*d)
+
+    I = np.array(I,dtype='float32')
+    b = -np.log(I/I0)
+    if mono_E is None:
+        mu_eff = np.sum(bin_heights * mu(bin_centers))
+        print(f"mu_eff: {mu_eff}")
+        b_mono = d*mu_eff
+    else:
+        b_mono = d*mu(mono_E)
+    # x = d_step_size * np.arange(1,b.size+1,1)
+    # y = b_mono-b
+    # corrections = np.column_stack((x,y))
+    # plt.plot(b,b_mono-b)
+    # plt.title('b_mono-b vs b')
+    # plt.show()
+        
+    
+    spline_corrections = interpolate.InterpolatedUnivariateSpline(b, b_mono, k=1)
+    # return corrections,corrections2
+
+    O['d_step_size'] = d_step_size
+    O['b'] = b
+    O['b_mono'] = b_mono
+    return spline_corrections,O
+def bhc_shapes():
+    plt.rcParams.update({
+        "text.usetex": True,
+        "text.latex.preamble": r"\usepackage{amsmath}",
+        "font.family": "serif",
+        "font.serif": ["Computer Modern"],  # This is the standard LaTeX font
+        "font.size": 14,
+        "axes.labelsize": 14,
+        "legend.fontsize": 12,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+    })
+
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=physical_size,voxel_num=voxel_num)
+
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_image_shapes3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+    tau = threshold_otsu(recon.as_array())
+    segmented = ImageData(array=np.array(recon > tau, dtype='float32'), geometry=ig)
+    # show2D(segmented)
+
+    bhc,O = theoretical_bhc(physical_size,mono_E=None,num_samples=1000)
+    max_idx = O['b'].size
+    # plt.plot(O['b'][:max_idx],O['b_mono'][:max_idx])
+    # plt.xlabel('$b$')
+    # plt.ylabel('$\overline{b}$')
+    # plt.show()
+
+    b_bar = AcquisitionData(array=np.array(bhc(b.as_array()),dtype='float32'), geometry=ag)
+    recon_bhc = FBP(b_bar, image_geometry=ig).run(verbose=0)
+    # show2D(recon_bhc, title='recon_bhc')
+    # show1D(recon_bhc, slice_list=[('horizontal_y', recon.shape[0]//2)])
+
+    # A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    # path_lengths = A.direct(segmented)
+    # plt.plot(path_lengths,b_bar)
+
+#######
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(2, 1, height_ratios=[3, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 3
+    ax[0] = fig.add_subplot(top_row_gs[0, 0])
+    ax[1] = fig.add_subplot(top_row_gs[0, 1])
+    ax[2] = fig.add_subplot(gs[1])
+
+    plt.sca(ax[0])
+    plt.plot(O['b'][:max_idx],O['b_mono'][:max_idx])
+    plt.grid(True)
+    plt.xlabel('$b$')
+    plt.ylabel('$\overline{b}$')
+    plt.title(r'Linear interpolation of $b\mapsto\overline{b}$')
+
+    plt.sca(ax[1])
+    plt.imshow(recon_bhc.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction of BHC data')
+    plt.colorbar()
+
+    hori_idx = 650
+    plt.sca(ax[2])
+    # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    plt.plot(recon_bhc.as_array()[hori_idx,:]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx} on the reconstruction')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.85)
+    # plt.savefig(os.path.join(base_dir, 'plots/t_bhc_shapes.pdf'))
+    plt.show()
+
+
+######
+

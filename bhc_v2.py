@@ -127,14 +127,14 @@ def clip_otsu_segment(recon, ig, clip=True, title=''):
     show2D(segmented, title=title)
     return segmented
 
-def bhc_v2(path_lengths, data, f_mono, f_poly, num_bins, filter=None, weight_fun=np.sqrt, color_norm='log'):
-    # filter: logical array of same shape as data
-    if filter is None:
+def bhc_v2(path_lengths, data, f_mono, f_poly, num_bins, mask=None, weight_fun=np.sqrt, color_norm='log'):
+    # mask: logical array of same shape as data
+    if mask is None:
         x = x = np.array(path_lengths.as_array())
         y = np.array(data.as_array())
     else:
-        x = np.array(path_lengths.as_array()[filter])
-        y = np.array(data.as_array()[filter])
+        x = np.array(path_lengths.as_array()[mask])
+        y = np.array(data.as_array()[mask])
     
     norms = {'lin': Normalize(), 'log': LogNorm()}
     counts, x_edges, y_edges, _ = plt.hist2d(x,y,bins=100, range=[[0,x.max()],[0,y.max()]], norm=norms[color_norm])
@@ -155,7 +155,7 @@ def bhc_v2(path_lengths, data, f_mono, f_poly, num_bins, filter=None, weight_fun
     counts_fit = counts_flat[nonzero_counts]
     weights = weight_fun(counts_fit)
     popt_poly, p_cov = curve_fit(f_poly, y_fit, x_fit, sigma=1./weights, absolute_sigma=True)
-
+    print(f'popt_poly: {popt_poly}')
     popt_mono, p_cov = curve_fit(f_mono, x_fit, y_fit, sigma=1./weights, absolute_sigma=True)
     # popt_mono, p_cov = curve_fit(f_mono, x_fit, y_fit, sigma=1./(1+np.log(counts_fit)), absolute_sigma=True)
     # popt_mono, p_cov = curve_fit(f_mono, x_fit, y_fit)
@@ -195,7 +195,7 @@ def testing():
     segmented = clip_otsu_segment(recon, ig, title='Otsu segmentation on initial FDK', clip=1)
     path_lengths = A.direct(segmented)
 
-    filter = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
+    mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
     def f_mono(x, a):
         return a*x
     def f_poly1(x, a,b,c):
@@ -204,10 +204,58 @@ def testing():
         return a*x**5 + b*x
     def f_poly3(x, a,b):
         return a*x**5
-    data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly3, num_bins=100, filter=filter)
+    data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly3, num_bins=100, mask=mask)
     cmap = ['grey', 'viridis', 'nipy_spectral', 'turbo', 'gnuplot2'][0]
     # show2D(recon_bhc, cmap=cmap)
     show2D(recon_bhc, fix_range=(-0.5,1))
+
+def bhc_v2_iter():
+    def bhc_iteration(recon, it):
+        segmented = clip_otsu_segment(recon, ig, title=f'Otsu segmentation on iteration={it}', clip=1)
+        path_lengths = A.direct(segmented)
+        mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
+        data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly2, num_bins=100, mask=mask)
+        F = LeastSquares(A, data_bhc)
+        G = IndicatorBox(lower=0.0)
+        x0 = ig.allocate(0.1)
+        myFISTANN = FISTA(f=F, g=G, initial=x0, 
+                        max_iteration=1000,
+                        update_objective_interval=10)
+        return myFISTANN
+    
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    def f_mono(x, a):
+        return a*x
+    def f_poly1(x, a):
+        return a*x**2
+    def f_poly2(x, a,b):
+        return a*x**3 + b*x
+    def f_poly3(x, a):
+        return a*x**5
+
+    ###
+    # F = LeastSquares(A, data)
+    # G = IndicatorBox(lower=0.0)
+    # x0 = ig.allocate(0.1)
+    # fistaNN = FISTA(f=F, g=G, initial=x0, 
+    #                 max_iteration=1000,
+    #                 update_objective_interval=10)
+    # fistaNN.run(100, verbose=1)
+    # recon = fistaNN.solution
+    # show2D(recon,f'fistaNN BHC reconstruction iteration=0')
+    ###
+
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run()
+    for i in range(1,3):
+    # for i in range(5,9):
+        fistaNN = bhc_iteration(recon,it=i)
+        fistaNN.run(100, verbose=1)
+        recon = fistaNN.solution
+        show2D(recon,f'fistaNN BHC reconstruction iteration={i}')
 
 
 def bhc_v2_dev():

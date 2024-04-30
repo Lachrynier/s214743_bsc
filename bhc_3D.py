@@ -148,6 +148,11 @@ def main():
     path_lengths = A.direct(segmented)
     data_bhc, recon_bhc = bhc(path_lengths, data, f_mono, f_poly, num_bins=25)
 
+    file_path = os.path.join(base_dir, 'bjobs/X20_bhc_recon_full')
+    with open(file_path, 'wb') as file:
+        pickle.dump(recon_bhc, file)
+    return
+
     vert_slice = recon.get_dimension_size('vertical')//2
     hori_y_slice = recon.get_dimension_size('horizontal_y')//2
     hori_x_slice = [recon.get_dimension_size('horizontal_x')//2, 400][1]
