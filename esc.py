@@ -1,3 +1,10 @@
+from IPython import get_ipython
+ipython = get_ipython()
+# ipython.run_line_magic(r"%load_ext autoreload")
+# ipython.run_line_magic(r"%autoreload 2")
+ipython.run_line_magic("load_ext", "autoreload")
+ipython.run_line_magic("autoreload", "2")
+
 import os
 import numpy as np
 import pickle
@@ -65,7 +72,10 @@ from skimage.filters import threshold_otsu
 from scipy.ndimage import convolve1d
 
 from cil.optimisation.operators import CompositionOperator, FiniteDifferenceOperator, MatrixOperator
-from cil.framework import DataContainer
+from cil.framework import DataContainer, BlockDataContainer
+
+from generate_plots import setup_generic_cil_geometry
+from bhc import load_centre
 
 def TV_2D(im):
     None
@@ -109,13 +119,13 @@ def gaussian_kernel(beta, gamma, threshold=1e-3, plot=False):
 # gaussian_kernel(0,25)
 
 def compute_scatter_basis(data,basis_params):
-        # basis params: list of lists [alpha,beta,gamma]
-        S = np.zeros((len(basis_params),*data.shape))
-        alpha,beta,gamma = [list(param) for param in zip(*basis_params)]
-        for i in range(S.shape[0]):
-            S[i] = apply_convolution(alpha[i]*data*np.exp(-data), gaussian_kernel(beta[i],gamma[i]))
-        
-        return S
+    # basis params: list of lists [alpha,beta,gamma]
+    S = np.zeros((len(basis_params),*data.shape))
+    alpha,beta,gamma = [list(param) for param in zip(*basis_params)]
+    for i in range(S.shape[0]):
+        S[i] = apply_convolution(alpha[i]*data*np.exp(-data), gaussian_kernel(beta[i],gamma[i]))
+    
+    return S
 
 def compute_image_basis(data,scatter_basis):
     None
@@ -329,6 +339,152 @@ def asd2():
     # d_vec = np.zeros(1+nc)
     # d_vec[1] = d
     # (obj(x0+d_vec)-obj(x0-d_vec))/(2*d)
+
+
+def simulate_scatter():
+    # from generate_plots import setup_generic_cil_geometry
+    # physical_size = 1
+    # voxel_num = 1000
+    # ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+    # ig = ag.get_ImageGeometry()
+
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    # filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
+    filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    im_arr = io.imread(filepath)
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    mu = 10 / (ig.voxel_num_x*ig.voxel_size_x) # scale to 1 mm
+    # mu = 40 / (ig.voxel_num_x*ig.voxel_size_x)
+    data = mu*A.direct(im)
+    data.reorder('tigre')
+    recon_P = FDK(data, image_geometry=ig).run(verbose=0)
+    show2D(recon_P)
+
+    ### Scatter simulation
+    I_P = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    # plt.plot(b[100,:])
+    # plt.plot(trans[0,:])
+    # basis_params = [[1/40,0,40]]
+    factor = [20,40,100,200][1]
+    basis_params = [[1/factor,0,factor]]
+
+    I_S = compute_scatter_basis(b,basis_params)
+    # I_S = 0.05*I_S*3
+    I_S = 0.05*I_S*3*3
+    I = I_P + I_S[0]
+
+    idx = 0
+    plt.plot(I_P[idx,:])
+    plt.plot(I_S[0,idx,:])
+    plt.plot(I[idx,:])
+    data_scatter = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I, dtype=np.float32), geometry=ag))
+    recon = FDK(data_scatter, image_geometry=ig).run(verbose=0)
+    show2D(recon)
+
+    P = recon.as_array()
+    b = data_scatter.as_array()
+    nx,ny = ig.shape
+
+    ### ESC step
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+    factor = [40,100][0]
+    basis_params = [[1/factor,0,factor]]
+
+    trans = I
+    nc = len(basis_params)
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S = 0.05*I_S
+    I_Q = trans-I_S
+    s = b[None,:,:] + np.log(I_Q)
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        # show2D(-S[i])
+        show2D(S[i])
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = - S.reshape(nc, nx*ny).T
+
+    op1 = MatrixOperator(Mext)
+    op2 = GradientOperator(ImageGeometry(voxel_num_x=nx,voxel_num_y=ny))
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    def obj(x):
+        c = np.ones(1+nc)
+        c[1:] = x
+        data_c = DataContainer(c)
+        return F(K.direct(data_c))
+    
+    def obj2(x):
+        Q = P + np.sum(x[:,None,None]*S, axis=0)
+        diff1 = np.diff(Q, axis=0)
+        diff2 = np.diff(Q, axis=1)
+        tv = np.sum(np.abs(diff1)) + np.sum(np.abs(diff2))
+        return tv
+    # x0 = np.array([0.1,0.1,0.1])
+    x0 = np.array([0.1])
+
+    l,u = -np.inf*np.ones(nc),np.zeros(nc)
+    # l,u = np.zeros(nc),np.ones(nc)*np.inf
+    bounds = sp.optimize.Bounds(lb=l, ub=u, keep_feasible=False)
+
+    n_angles,n_panel = s.shape[1:]
+    A = - s.reshape(nc, n_angles*n_panel).T
+    ubA = trans.flatten()
+    con = sp.optimize.LinearConstraint(A, ub=ubA)
+    options = {'maxiter': 10, 'disp': True}
+    def callback(x):
+        print("Current solution:", x)
+    
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, constraints=con, options=options, callback=callback)
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, constraints=con, options=options, callback=callback)
+    # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, options=options, callback=callback)
+    res = sp.optimize.minimize(fun=obj2, jac='3-point', x0=x0, options=options, callback=callback)
+    # c = np.ones(1+nc)
+    # c[1:] = res.x # "optimal"
+    # c[1:] = np.zeros(nc)
+    # c[1:] = np.array([3])
+    # Q = Mext.dot(c).reshape((nx,ny))
+    Q = P + np.sum(res.x[:,None,None]*S, axis=0)
+    show2D(Q)
+
+    q = trans - A.dot(res.x).reshape((n_angles,n_panel))
+    print(q.min())
+
+
+    # op = GradientOperator(ImageGeometry(voxel_num_x=nx,voxel_num_y=ny))
+    # K = CompositionOperator(op)
+    # F = MixedL21Norm()
+    def TV(im):
+        op = GradientOperator(ImageGeometry(voxel_num_x=nx,voxel_num_y=ny))
+        return MixedL21Norm()(op.direct(im))
+    # TotalVariation().func(BlockDataContainer(DataContainer(Q)))
+    print(TV(ImageData(Q.astype('float32'), geometry=ig)))
+    print(TV(ImageData(P.astype('float32'), geometry=ig)))
+
+    def total_variation(image):
+        # Calculate differences along both axes
+        diff1 = np.diff(image, axis=0)
+        diff2 = np.diff(image, axis=1)
+        
+        # Compute the total variation
+        tv = np.sum(np.abs(diff1)) + np.sum(np.abs(diff2))
+    
+        return tv
+    
+    print(total_variation(Q))
+    print(total_variation(P))
+    print(total_variation(mu*recon_P.as_array()))
+
 
 
 def ESC(basis_params, num_iter=50, delta=1/11, c_l=1):

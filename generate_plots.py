@@ -267,7 +267,7 @@ def transmission_plot():
     mu = fun_attenuation(plot=False)
     max_pen = 10
     xx = np.linspace(0,max_pen,num=200)
-    plt.figure(figsize=(10,10))
+    plt.figure(figsize=(8,8))
     for E in energies:
         mu_E = mu(E)
         plt.plot(xx,np.exp(-mu_E*xx), label=f'{E} keV')
@@ -280,6 +280,7 @@ def transmission_plot():
     plt.yticks(10.0**np.arange(-15, 1, 1))  # Corrected line here
     plt.xticks(np.arange(0,max_pen+1,1))
     # plt.grid(True, which="both", ls="--")  # This ensures grid lines are drawn for both major and minor ticks
+    # plt.savefig(os.path.join(base_dir, 'plots/trans_bounds.pdf'))
     plt.show()
 
 def staircase_plot():
@@ -446,7 +447,7 @@ def staircase_experiments():
 
 
 ########## bh
-def setup_generic_cil_geometry(physical_size, voxel_num, cell_to_im_ratio=1):
+def setup_generic_cil_geometry(physical_size, voxel_num, cell_to_im_ratio=1, fan=False):
 ### Set up CIL geometries
     angles = np.linspace(start=0, stop=180, num=3*180//1, endpoint=False)
     voxel_size = physical_size/voxel_num
@@ -455,9 +456,22 @@ def setup_generic_cil_geometry(physical_size, voxel_num, cell_to_im_ratio=1):
     factor = cell_to_im_ratio
     panel_num_cells = math.ceil(np.sqrt(2)*factor*voxel_num)
     panel_cell_length = 1/factor * voxel_size
+
+    # if fan:
+    #     angles = np.linspace(start=0, stop=360, num=10*180//1, endpoint=False)
+    #     diag_size = math.ceil(np.sqrt(2))
+    #     dist_factor = 5
+    #     ag = AcquisitionGeometry.create_Cone2D(source_position=[0,-2*physical_size], detector_position=[0,dist_factor*physical_size], detector_direction_x=[1,0], rotation_axis_position=[0,0])\
+    #         .set_panel(num_pixels=panel_num_cells,pixel_size=5*panel_cell_length,origin='top-right')\
+    #         .set_angles(angles=angles)
+    #     # ag = AcquisitionGeometry.create_Cone2D(source_position=[0,-2*physical_size], detector_position=[0,2*physical_size])\
+    #     #     .set_panel(num_pixels=2*diag_size*panel_num_cells, pixel_size=panel_cell_length)\
+    #     #     .set_angles(angles=angles)
+    # else:
     ag = AcquisitionGeometry.create_Parallel2D(ray_direction=[0,1], detector_position=[0,physical_size], detector_direction_x=[1,0], rotation_axis_position=[0,0])\
         .set_panel(num_pixels=panel_num_cells,pixel_size=panel_cell_length)\
         .set_angles(angles=angles)
+    
     return ag,ig
 def generate_bh_data(im, ag, ig):
     mu = fun_attenuation(plot=False)
@@ -760,3 +774,19 @@ def bhc_shapes():
 
 ######
 
+def X20_raw_proj():
+    # im1 = io.imread('plots/X20_raw_0785.png')
+    # im2 = io.imread('plots/X20_raw_1193.png')
+    im1 = np.load('plots/X20_raw_0785.npy')
+    im2 = np.load('plots/X20_raw_1193.npy')
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+
+    cax = ax[0].imshow(im1, cmap='grey')
+    # fig.colorbar(cax, ax=ax[0])
+    ax[0].set_title("X20_0785.tif")
+    ax[1].imshow(im2, cmap='grey')
+    ax[1].set_title("X20_1193.tif")
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'plots/X20_raw_proj.pdf'), format='pdf', dpi=300)
+    plt.show()

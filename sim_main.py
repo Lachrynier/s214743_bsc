@@ -33,7 +33,7 @@ from cil.utilities.jupyter import islicer
 from cil.utilities.display import show_geometry, show2D, show1D
 from cil.recon import FDK, FBP
 from cil.plugins.tigre import ProjectionOperator#, FBP
-from cil.processors import TransmissionAbsorptionConverter, Slicer
+from cil.processors import TransmissionAbsorptionConverter, Slicer, AbsorptionTransmissionConverter
 from cil.optimisation.algorithms import CGLS, SIRT
 
 from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry
@@ -41,6 +41,7 @@ from cil.utilities.noise import gaussian, poisson
 
 
 base_dir = os.path.abspath('/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev/analysis/s214743_bsc/')
+bfig_dir = os.path.join(base_dir,'bjobs/figs')
 
 ### Test image functions
 def create_circle_image(image_size, radius, center):
@@ -259,21 +260,17 @@ def staircase_bhc(physical_in_mm,mono_E=None):
     # plt.hist(b.flatten(),bins=100)
     # plt.show()
 
-    mu_eff = np.sum(bin_heights * mu(bin_centers))
-    # mono_E = 150
-    # mono_E = 105
-    # mono_E = 55
-    # mu_eff = mu(mono_E)
-    # b_mono = -np.log(np.exp(-mu_eff*d))
-    b_mono = d*mu_eff
-
     plt.plot(voxel_size * np.arange(1,b.size+1,1),b,label='Polychromatic absorption')
-    plt.title('polychromatic absorption vs path length')
-    plt.show()
+    if mono_E is None:
+        mu_eff = np.sum(bin_heights * mu(bin_centers))
+        b_mono = d*mu_eff
+        plt.plot(voxel_size * np.arange(1,b_mono.size+1,1),b_mono,'--',label='Monochromatic absorption at effective initial attenuation')
+    else:
+        b_mono = d*mu(mono_E)
+        plt.plot(voxel_size * np.arange(1,b_mono.size+1,1),b_mono,'--',label=f'Monochromatic absorption at {mono_E} keV')
 
-    plt.plot(voxel_size * np.arange(1,b.size+1,1),b,label='Polychromatic absorption')
-    # plt.plot(voxel_size * np.arange(1,b_mono.size+1,1),b_mono,'--',label='Monochromatic absorption at effective initial attenuation')
-    # plt.plot(voxel_size * np.arange(1,b_mono.size+1,1),b_mono,'--',label=f'Monochromatic absorption at {mono_E} keV')
+    # plt.plot(voxel_size * np.arange(1,b.size+1,1),b,label='Polychromatic absorption')
+    # plt.title('polychromatic absorption vs path length')
     # plt.loglog(voxel_size * np.arange(1,b.size+1,1),b,label='Polychromatic absorption')
     # plt.loglog(voxel_size * np.arange(1,b_mono.size+1,1),b_mono,'--',label='Monochromatic absorption at effective initial attenuation')
     plt.xlabel('Pathlength (mm)')
@@ -308,14 +305,15 @@ def staircase_bhc(physical_in_mm,mono_E=None):
     corrections2 = np.column_stack((b,b_mono-b))
     return corrections,corrections2
 
-
+# staircase_bhc(0.01)
     
 
 def bhc_test1():
+    physical_in_mm = 1
 ### Set up CIL geometries
     angles = np.linspace(start=0, stop=180, num=3*180//1, endpoint=False) #6
     physical_size = physical_in_mm # mm
-    voxel_num = 500
+    voxel_num = 1000
     voxel_size = physical_size/voxel_num
 
     ig = ImageGeometry(voxel_num_x=voxel_num, voxel_num_y=voxel_num, voxel_size_x=voxel_size, voxel_size_y=voxel_size, center_x=0, center_y=0)
@@ -330,17 +328,21 @@ def bhc_test1():
         .set_panel(num_pixels=panel_num_cells,pixel_size=panel_cell_length)\
         .set_angles(angles=angles)
     
+    
+    print(ig)
+    show_geometry(ag,ig, grid=True)
+    
 ### Generate test image
     ## circle with hole
-    if False:
+    if True:
         # im1 = create_circle_image(image_size=voxel_num, radius=voxel_num//3, center=[voxel_num//2, voxel_num//2])
-        im1 = create_circle_image(image_size=voxel_num, radius=voxel_num//3, center=[voxel_num//2, voxel_num//2])
+        im1 = create_circle_image(image_size=voxel_num, radius=voxel_num//2.5, center=[voxel_num//2, voxel_num//2])
         im2 = create_circle_image(image_size=voxel_num, radius=voxel_num//5.5, center=[voxel_num//2, voxel_num//2])
         # im_arr = im1
-        im_arr = im1-im2
+        im_arr = im1-0*im2
 
     ## concentric rings
-    if True:
+    if False:
         # im_arr = create_rings_image(size=voxel_num, spacing=10, ring_width=15, radius=voxel_num//3, center=[voxel_num//2, voxel_num//2])
         im_arr = create_rings_image(size=voxel_num, spacing=20, ring_width=30, radius=voxel_num//3, center=[voxel_num//2, voxel_num//2])
 
@@ -398,10 +400,49 @@ def bhc_test1():
     ## raw
     b.reorder(order='tigre')
     recon = FBP(b, image_geometry=ig, backend='tigre').run(verbose=0)
-    show2D(recon, title='recon')
+    # show2D(recon, title='FDK reconstruction')
     # show1D(recon, slice_list=[('horizontal_y', recon.shape[0]//2)])
+
+####################    ###
+    # fig,ax = plt.subplots(2,1, figsize=(8,12),gridspec_kw={'height_ratios': [2, 1]})
+    # ax[0].imshow(recon.as_array(), origin='lower', cmap='gray')
+    # ax[1].plot(recon.as_array()[recon.shape[0]//2,:])
+
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10, 8))
+    gs = GridSpec(2, 1, height_ratios=[3, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 3
+    ax[0] = fig.add_subplot(top_row_gs[0, 0])
+    ax[1] = fig.add_subplot(top_row_gs[0, 1])
+    ax[2] = fig.add_subplot(gs[1])
+
+    plt.sca(ax[0])
+    plt.imshow(im_arr, origin='lower',cmap='grey')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Disk test image')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    plt.colorbar()
+
+    plt.sca(ax[2])
     plt.plot(recon.as_array()[recon.shape[0]//2,:])
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={recon.shape[0]//2} on the reconstruction')
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.subplots_adjust(top=0.85)
+    # plt.savefig(os.path.join(base_dir, 'plots/bh_disk.pdf'))
     plt.show()
+####################################
 
     ## mono
     recon_mono = FBP(b_mono, image_geometry=ig, backend='tigre').run(verbose=0)
@@ -448,7 +489,7 @@ def bhc_test1():
 
 ### bhc on noisy data
     # 400
-    b_noisy = np.clip(a=skimage.util.random_noise(b.as_array(), mode='gaussian',clip=False, mean=0, var=(1/(0.5*400*I))**2), a_min=0, a_max=None)
+    b_noisy = np.clip(a=skimage.util.random_noise(b.as_array(), mode='gaussian',clip=False, mean=0, var=1/(0.5*400*I)), a_min=0, a_max=None)
     b_noisy = AcquisitionData(array=np.array(b_noisy,dtype='float32'), geometry=ag)
     # show2D([b,b_noisy],title='b and b_noisy',num_cols=1)
 
@@ -630,6 +671,118 @@ def bhc_test2():
     show1D(recon_bhc, slice_list=[('horizontal_y', recon.shape[0]//2)])
     
 
+def lin_interp_sino2D(data,tau):
+    def lin_interp_proj(proj):
+        above_tau_indices = np.where(proj > tau)[0]
+        diffs = np.diff(above_tau_indices)
+        breaks = np.where(diffs > 1)[0]
+        groups = np.split(above_tau_indices, breaks+1)
+        if not list(groups[0]):
+            return proj
+        for group in groups:
+            if group[0] == 0:
+                lval = tau
+            else:
+                lval = proj[group[0]-1]
+            if group[-1] == proj.size-1:
+                rval = tau
+            else:
+                rval = proj[group[-1]+1]
+            
+            proj[group] = (rval-lval)/((group[-1]+1) - (group[0]-1)) * (group - (group[0]-1)) + lval
+        return proj
+    
+    # data_interp = np.apply_along_axis(func1d=lin_interp_proj, axis=1, arr=data.copy().as_array())
+    data_interp = data.copy().as_array()
+    for i in range(data.shape[0]):
+        data_interp[i,:] = lin_interp_proj(data_interp[i,:])
+    return AcquisitionData(array=data_interp, geometry=data.geometry)
+
+def test_linear_interpolation():
+    def compare_lin_interp(ang_idx,indices=None):
+        n_rays = data.shape[1]
+        if indices is None:
+            indices = np.arange(0,n_rays)
+        plt.figure(figsize=(10,8))
+        plt.title(f'Single projection at angle_index={ang_idx}')
+        plt.xlabel('Panel index')
+        plt.ylabel('Absorption')
+        plt.plot([indices.min(),indices.max()],[tau,tau],label='tau (threshold)')
+        plt.plot(indices,data.as_array()[ang_idx,indices], label='data', marker='.')
+        plt.plot(indices,data_interp.as_array()[ang_idx,indices], label='data_interp')
+        plt.legend()
+        plt.show()
+
+    # file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    
+    data_trans = AbsorptionTransmissionConverter()(data)
+    show2D(data_trans, cmap='nipy_spectral', fix_range=(data_trans.min(),0.5))
+
+    tau = -np.log(0.115)
+    # tau = -np.log(0.13)
+    # tau = -np.log(0.15)
+    # tau = -np.log(0.07)
+    # show1D(data_trans, slice_list=[('angle', 480)])
+    # show1D(data, slice_list=[('angle', 800)])
+
+    data_interp = lin_interp_sino2D(data, tau)
+    ang_idx = 480
+    # show1D([data,data_interp], slice_list=[[('angle', ang_idx)],[('angle', ang_idx)]], line_styles=['-','-'])
+    indices = np.arange(275,750)
+    compare_lin_interp(ang_idx,indices=None)
+
+    recon = FDK(data).run(verbose=0)
+    recon_interp = FDK(data_interp).run(verbose=0)
+    show2D([recon,recon_interp],title=f'recon vs recon_interp for tau={tau}',fix_range=(-0.15,0.6))
+    show2D([recon,recon_interp],title=f'recon vs recon_interp for tau={tau}')
+
+    show2D(AbsorptionTransmissionConverter()(data_interp), cmap='nipy_spectral', fix_range=(data_trans.min(),0.5))
+
+
+def back_projection():
+    file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    
+    ###
+    # tau = -np.log(0.13)
+    # data = lin_interp_sino2D(data, tau)
+
+    ###
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    tau = 0.3
+    air_proj_mask = 1000*np.array(data.as_array() < 0.3, dtype=np.float32)
+    air_proj_mask = AcquisitionData(array=air_proj_mask, geometry=ag)
+
+    # fdk = FDK(data)
+    # recon = FDK(data, filter=np.ones(2**11,dtype=np.float32)).run(verbose=0)
+    # show2D(recon).save(os.path.join(bfig_dir,'backprojection.png'))
+
+    fft_order = 12
+    recon_air = FDK(air_proj_mask, filter=np.ones(2**12,dtype=np.float32)).run(verbose=0)
+    recon_mask = recon_air < 1
+    show2D(recon_air, fix_range=(0,10), cmap='nipy_spectral').save(os.path.join(bfig_dir,'recon_air_mask.png'))
+    show2D(recon_air < 1).save(os.path.join(bfig_dir,'recon_air_mask_bin.png'))
+
+    ub = np.array(recon_air < 1, dtype=np.float32)
+    ub[recon_air < 0.5] = np.inf
+    G = IndicatorBox(lower=0, upper=ub)
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    F = LeastSquares(A, data)
+    x0 = ig.allocate(0.0)
+    # x0 = FDK(data).run(verbose=0)
+    show2D(x0)
+    myFISTAmask = FISTA(f=F, g=G, initial=x0, 
+                      max_iteration=1000,
+                      update_objective_interval = 10)
+    myFISTAmask.run(50, verbose=1)
+    show2D(myFISTAmask.solution,'Convex hull FISTA').save(os.path.join(bfig_dir,'fista_hull.png'))
+    show2D(myFISTAmask.solution,fix_range=(0,1.25))
+
 
 physical_in_mm = 1
 
@@ -637,4 +790,6 @@ if __name__ == "__main__":
     # staircase_bhc(0.001)
     # bhc_test1()
     # bhc_test2()
+    # back_projection()
+    # test_linear_interpolation()
     None
