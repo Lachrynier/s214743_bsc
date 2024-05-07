@@ -348,12 +348,13 @@ def simulate_scatter():
     # ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
     # ig = ag.get_ImageGeometry()
 
-    data = load_centre('X20_cor.pkl')
+    data = load_centre('X20.pkl')
     ag = data.geometry
     ig = ag.get_ImageGeometry()
 
-    # filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
-    filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_geom.png')
     im_arr = io.imread(filepath)
     im_arr = color.rgb2gray(im_arr) > 0
 
@@ -372,21 +373,27 @@ def simulate_scatter():
     # plt.plot(b[100,:])
     # plt.plot(trans[0,:])
     # basis_params = [[1/40,0,40]]
-    factor = [20,40,100,200][1]
+    factor = [20,40,100,200][2]
     basis_params = [[1/factor,0,factor]]
 
     I_S = compute_scatter_basis(b,basis_params)
     # I_S = 0.05*I_S*3
-    I_S = 0.05*I_S*3*3
+    I_S = 0.05*I_S*3
     I = I_P + I_S[0]
 
     idx = 0
-    plt.plot(I_P[idx,:])
-    plt.plot(I_S[0,idx,:])
-    plt.plot(I[idx,:])
+    plt.plot(I_P[idx,:],label='I_P')
+    plt.plot(I_S[0,idx,:],label='I_S')
+    plt.plot(I[idx,:],label='I=I_P+I_S')
+    plt.legend()
+    plt.show()
     data_scatter = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I, dtype=np.float32), geometry=ag))
     recon = FDK(data_scatter, image_geometry=ig).run(verbose=0)
-    show2D(recon)
+    show2D(recon, title='reconstruction of -ln(I_P+I_S)')
+    hori_idx = 700
+    direction = 'horizontal_x'
+    show1D(recon, [(direction,hori_idx)], title=f'{direction}={hori_idx}', size=(8,3))
+    plt.show()
 
     P = recon.as_array()
     b = data_scatter.as_array()
@@ -394,21 +401,58 @@ def simulate_scatter():
 
     ### ESC step
     # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
-    factor = [40,100][0]
-    basis_params = [[1/factor,0,factor]]
+
+    # factor = [40,100][1]
+    # basis_params = [[1/factor,0,factor]]
+
+    factors = [40,100,200]
+    basis_params = [[1/factor,0,factor] for factor in factors]
+    # basis_params[0][0]
 
     trans = I
     nc = len(basis_params)
-    I_S = compute_scatter_basis(b,basis_params)
-    I_S = 0.05*I_S
-    I_Q = trans-I_S
-    s = b[None,:,:] + np.log(I_Q)
+
+    basis_idx = 0
+    if True:
+        ### approximation (real world data)
+        I_S = compute_scatter_basis(b,basis_params)
+        I_S = 0.05*I_S
+        I_Q = trans-I_S
+        s = b[None,:,:] + np.log(I_Q)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[basis_idx,idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.show()
+        ###
+    else:
+        ### what the model is based on
+        I_S = compute_scatter_basis(-np.log(I_P),basis_params)
+        I_S = 0.05*I_S
+        I_Q = trans-I_S
+        s = -np.log(I_S+I_P) + np.log(I_P)
+        ###
+
+    print(np.unravel_index(s.argmax(),s.shape), np.max(s))
+
+    fig,ax = plt.subplots(1,2,figsize=(10,5))
+    plt.title(f'basis_idx: {basis_idx}')
+    plt.sca(ax[0])
+    plt.plot(s[basis_idx,idx,:],label='s')
+    plt.legend()
+
+    plt.sca(ax[1])
+    plt.plot(-np.log(-s[basis_idx,idx,:]),label='-ln(-s)')
+    plt.legend()
+    plt.show()
+
     S = np.zeros((nc,*ig.shape))
     for i in range(nc):
         data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
         S[i] = FDK(data_s_i).run(verbose=0).as_array()
         # show2D(-S[i])
-        show2D(S[i])
+        show2D(S[i],title=f'S_{i}')
 
     Mext = np.zeros((nx*ny,nc+1))
     Mext[:,0] = P.flatten()
@@ -431,7 +475,8 @@ def simulate_scatter():
         tv = np.sum(np.abs(diff1)) + np.sum(np.abs(diff2))
         return tv
     # x0 = np.array([0.1,0.1,0.1])
-    x0 = np.array([0.1])
+    # x0 = np.array([0.1])
+    x0 = 0.1*np.ones(nc)
 
     l,u = -np.inf*np.ones(nc),np.zeros(nc)
     # l,u = np.zeros(nc),np.ones(nc)*np.inf
@@ -448,7 +493,7 @@ def simulate_scatter():
     # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, constraints=con, options=options, callback=callback)
     # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, constraints=con, options=options, callback=callback)
     # res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, bounds=bounds, options=options, callback=callback)
-    res = sp.optimize.minimize(fun=obj2, jac='3-point', x0=x0, options=options, callback=callback)
+    res = sp.optimize.minimize(fun=obj, jac='3-point', x0=x0, options=options, callback=callback)
     # c = np.ones(1+nc)
     # c[1:] = res.x # "optimal"
     # c[1:] = np.zeros(nc)
@@ -456,7 +501,9 @@ def simulate_scatter():
     # Q = Mext.dot(c).reshape((nx,ny))
     Q = P + np.sum(res.x[:,None,None]*S, axis=0)
     show2D(Q)
+    show1D(ImageData(Q,geometry=ig), [(direction,hori_idx)], title=f'{direction}={hori_idx}', size=(8,3))
 
+    ###
     q = trans - A.dot(res.x).reshape((n_angles,n_panel))
     print(q.min())
 
