@@ -649,6 +649,65 @@ def bh_shapes():
     plt.savefig(os.path.join(base_dir, 'plots/bh_shapes.pdf'))
     plt.show()
 
+def bh_shapes_v2():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_image_shapes3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+############# Plotting
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10,18))
+    gs = GridSpec(4, 1, height_ratios=[4, 4, 1, 1])
+
+    ax = [None] * 4
+    ax[0] = fig.add_subplot(gs[0])
+    ax[1] = fig.add_subplot(gs[1])
+    ax[2] = fig.add_subplot(gs[2])
+    ax[3] = fig.add_subplot(gs[3])
+
+    plt.sca(ax[0])
+    plt.imshow(im_arr, origin='lower',cmap='grey')#, aspect='auto')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Shapes test image')
+    # ax[0].set_aspect('equal', adjustable='box')
+    # ax[0].set_anchor('C')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    plt.colorbar()
+
+    hori_idx = 650
+    plt.sca(ax[2])
+    # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    plt.plot(recon.as_array()[hori_idx,:]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx} on the reconstruction')
+    plt.grid(True)
+
+    plt.sca(ax[3])
+    plt.plot(im.as_array()[hori_idx,:]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx} on the original image')
+    plt.grid(True)
+
+    plt.tight_layout(pad=0, h_pad=1.3)
+    # plt.subplots_adjust(top=0.85)
+    # plt.subplots_adjust(top=0.95, bottom=0.05)
+    plt.savefig(os.path.join(base_dir, 'plots/bh_shapes.pdf'))
+    plt.show()
+
 def theoretical_bhc(physical_size,mono_E=None,num_samples=1000):
     ###
     mu = fun_attenuation(plot=False)

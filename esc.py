@@ -50,7 +50,7 @@ from cil.processors import TransmissionAbsorptionConverter, AbsorptionTransmissi
 from cil.optimisation.algorithms import CGLS, SIRT
 from cil.plugins.ccpi_regularisation.functions import FGP_TV
 
-from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry
+from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry, VectorData, VectorGeometry
 from cil.utilities.noise import gaussian, poisson
 
 from sim_main import lin_interp_sino2D
@@ -71,7 +71,7 @@ from skimage.filters import threshold_otsu
 # from scipy.signal import convolve
 from scipy.ndimage import convolve1d
 
-from cil.optimisation.operators import CompositionOperator, FiniteDifferenceOperator, MatrixOperator
+from cil.optimisation.operators import CompositionOperator, FiniteDifferenceOperator, MatrixOperator, LinearOperator
 from cil.framework import DataContainer, BlockDataContainer
 
 from generate_plots import setup_generic_cil_geometry
@@ -532,7 +532,238 @@ def simulate_scatter():
     print(total_variation(P))
     print(total_variation(mu*recon_P.as_array()))
 
+def simulate_scatter2():
+    data = load_centre('X20.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
 
+    filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_geom.png')
+    im_arr = io.imread(filepath)
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    mu = 10 / (ig.voxel_num_x*ig.voxel_size_x) # scale to 1 mm
+    # mu = 40 / (ig.voxel_num_x*ig.voxel_size_x)
+    data = mu*A.direct(im)
+    data.reorder('tigre')
+    recon_P = FDK(data, image_geometry=ig).run(verbose=0)
+    show2D(recon_P)
+
+    ### Scatter simulation
+    I_P = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    # plt.plot(b[100,:])
+    # plt.plot(trans[0,:])
+    # basis_params = [[1/40,0,40]]
+    factor = [20,40,100,200][2]
+    basis_params = [[1/factor,0,factor]]
+
+    I_S = compute_scatter_basis(b,basis_params)
+    # I_S = 0.05*I_S*3
+    I_S = 0.05*I_S*3
+    I = I_P + I_S[0]
+
+    idx = 0
+    plt.plot(I_P[idx,:],label='I_P')
+    plt.plot(I_S[0,idx,:],label='I_S')
+    plt.plot(I[idx,:],label='I=I_P+I_S')
+    plt.legend()
+    plt.show()
+    data_scatter = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I, dtype=np.float32), geometry=ag))
+    recon = FDK(data_scatter, image_geometry=ig).run(verbose=0)
+    show2D(recon, title='reconstruction of -ln(I_P+I_S)')
+    hori_idx = 700
+    direction = 'horizontal_x'
+    show1D(recon, [(direction,hori_idx)], title=f'{direction}={hori_idx}', size=(8,3))
+    plt.show()
+
+    P = recon.as_array()
+    b = data_scatter.as_array()
+    ny,nx = ig.shape
+
+    ### ESC step
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+
+    factor = [40,100][1]
+    basis_params = [[1/factor,0,factor]]
+
+    # factors = [40,100,200]
+    # basis_params = [[1/factor,0,factor] for factor in factors]
+    # basis_params[0][0]
+
+    trans = I
+    nc = len(basis_params)
+
+    basis_idx = 0
+    if True:
+        ### approximation (real world data)
+        I_S = compute_scatter_basis(b,basis_params)
+        I_S = 0.05*I_S
+        I_Q = trans-I_S
+        s = b[None,:,:] + np.log(I_Q)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[basis_idx,idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.show()
+        ###
+    else:
+        ### what the model is based on
+        I_S = compute_scatter_basis(-np.log(I_P),basis_params)
+        I_S = 0.05*I_S
+        I_Q = trans-I_S
+        s = -np.log(I_S+I_P) + np.log(I_P)
+        ###
+
+    print(np.unravel_index(s.argmax(),s.shape), np.max(s))
+
+    fig,ax = plt.subplots(1,2,figsize=(10,5))
+    plt.title(f'basis_idx: {basis_idx}')
+    plt.sca(ax[0])
+    plt.plot(s[basis_idx,idx,:],label='s')
+    plt.legend()
+
+    plt.sca(ax[1])
+    plt.plot(-np.log(-s[basis_idx,idx,:]),label='-ln(-s)')
+    plt.legend()
+    plt.show()
+
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        # show2D(-S[i])
+        show2D(S[i],title=f'S_{i}')
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = S.reshape(nc, nx*ny).T
+
+    vg = VectorGeometry(length=nc+1)
+    op1 = MyMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
+    op2 = GradientOperator(domain_geometry=ig)
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    # F = SmoothMixedL21Norm(epsilon=1e-2)
+
+    cext = VectorData(array=np.hstack((1,np.full(nc, 0.1, dtype=np.float32))), geometry=vg)
+    # id = op1.direct(cext)
+    # vd = op1.adjoint(id)
+    # print(np.linalg.norm(np.dot(Mext, cext.as_array()).reshape((ny,nx)) - id.as_array()))
+    # print(np.linalg.norm(np.dot(Mext.T,id.as_array().flatten()) - vd.as_array()))
+
+    l = -np.inf*np.ones(1+nc)
+    l[0] = 1
+    u = np.inf*np.ones(1+nc)
+    u[0] = 1
+    G = IndicatorBox(lower=l,upper=u)
+    pdhg = PDHG(f=F, g=G, operator=K, initial=cext, max_iteration=1000, update_objective_interval=10)
+    pdhg.run(iterations=150)
+
+    # fista = FISTA(f=F, g=G, operator=K, initial=cext, max_iteration=1000, update_objective_interval=5)
+    # fista.run(iterations=100)
+
+    print(pdhg.solution.as_array())
+    Q = op1.direct(pdhg.solution)
+    show2D(Q)
+    show1D(Q, [(direction,hori_idx)], title=f'{direction}={hori_idx}', size=(8,3))
+
+    F(op2.direct(op1.direct(VectorData(np.array([1,0])))))
+    F(op2.direct(op1.direct(VectorData(np.array([1,-4.46])))))
+
+
+class MyMatrixOperator(LinearOperator):
+    def __init__(self, A, domain_geometry, range_geometry, order='C'):
+        """
+        Custom linear operator that applies a matrix A to an input array.
+
+        Parameters:
+        A (ndarray): The matrix to apply in the direct and adjoint operations.
+        domain_geometry (ImageGeometry): The geometry of the input space.
+        range_geometry (ImageGeometry): The geometry of the output space.
+        order (str): The order of flattening and reshaping operations.
+                     'C' for row-major (C-style),
+                     'F' for column-major (Fortran-style).
+        """
+        super(MyMatrixOperator, self).__init__(domain_geometry=domain_geometry, 
+                                               range_geometry=range_geometry)
+        self.A = A
+        self.order = order
+
+    def direct(self, x, out=None):
+        flattened_x = x.as_array().flatten(order=self.order)
+        result_1d = np.dot(self.A, flattened_x)
+        result_2d = result_1d.reshape((self.range_geometry().voxel_num_y, 
+                                        self.range_geometry().voxel_num_x), 
+                                       order=self.order)
+
+        if out is None:
+            result = self.range_geometry().allocate()
+            result.fill(result_2d)
+            return result
+        else:
+            out.fill(result_2d)
+
+    def adjoint(self, y, out=None):
+        flattened_y = y.as_array().flatten(order=self.order)
+        result_1d = np.dot(self.A.T, flattened_y)
+
+        if out is None:
+            result = self.domain_geometry().allocate()
+            result.fill(result_1d)
+            return result
+        else:
+            out.fill(result_1d)
+
+class MyCustomOperator(LinearOperator):
+    def __init__(self, A, domain_geometry, range_geometry, order):
+        """
+        Custom linear operator that applies a matrix A to an input array.
+
+        Parameters:
+        A (ndarray): The matrix to apply in the direct and adjoint operations.
+        domain_geometry (ImageGeometry): The geometry of the input space.
+        range_geometry (ImageGeometry): The geometry of the output space.
+        order (str): The order of flattening and reshaping operations.
+                     'C' for row-major (C-style),
+                     'F' for column-major (Fortran-style).
+        """
+        super(MyCustomOperator, self).__init__(domain_geometry=domain_geometry, 
+                                               range_geometry=range_geometry)
+        self.A = A
+        self.order = order
+
+    def direct(self, x, out=None):
+        flattened_x = x.as_array().flatten(order=self.order)
+        result_1d = np.dot(self.A, flattened_x)
+        result_2d = result_1d.reshape((self.range_geometry().voxel_num_y, 
+                                        self.range_geometry().voxel_num_x), 
+                                       order=self.order)
+
+        if out is None:
+            result = self.range_geometry().allocate()
+            result.fill(result_2d)
+            return result
+        else:
+            out.fill(result_2d)
+
+    def adjoint(self, y, out=None):
+        flattened_y = y.as_array().flatten(order=self.order)
+        result_1d = np.dot(self.A.T, flattened_y)
+        result_2d = result_1d.reshape((self.domain_geometry().voxel_num_y, 
+                                        self.domain_geometry().voxel_num_x), 
+                                       order=self.order)
+
+        if out is None:
+            result = self.domain_geometry().allocate()
+            result.fill(result_2d)
+            return result
+        else:
+            out.fill(result_2d)
 
 def ESC(basis_params, num_iter=50, delta=1/11, c_l=1):
     def compute_k(data,B,I,c,delta):
