@@ -39,7 +39,7 @@ from cil.optimisation.operators import BlockOperator, GradientOperator,\
 from cil.optimisation.functions import IndicatorBox, MixedL21Norm, L2NormSquared, \
                                        BlockFunction, L1Norm, LeastSquares, \
                                        OperatorCompositionFunction, TotalVariation, \
-                                       ZeroFunction, SmoothMixedL21Norm
+                                       ZeroFunction, SmoothMixedL21Norm, MixedL11Norm
 
 from cil.io import NikonDataReader
 from cil.utilities.jupyter import islicer
@@ -644,10 +644,12 @@ def simulate_scatter2():
     Mext[:,1:] = S.reshape(nc, nx*ny).T
 
     vg = VectorGeometry(length=nc+1)
-    op1 = MyMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
+    op1 = ESCMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
     op2 = GradientOperator(domain_geometry=ig)
     K = CompositionOperator(op2,op1)
     F = MixedL21Norm()
+    # F = MixedL11Norm()
+
     # F = SmoothMixedL21Norm(epsilon=1e-2)
 
     cext = VectorData(array=np.hstack((1,np.full(nc, 0.1, dtype=np.float32))), geometry=vg)
@@ -669,55 +671,109 @@ def simulate_scatter2():
 
     print(pdhg.solution.as_array())
     Q = op1.direct(pdhg.solution)
-    show2D(Q)
+    show2D(Q, title=f"c_ext={pdhg.solution.as_array()}")
     show1D(Q, [(direction,hori_idx)], title=f'{direction}={hori_idx}', size=(8,3))
 
+    F(op2.direct(op1.direct(pdhg.solution)))
     F(op2.direct(op1.direct(VectorData(np.array([1,0])))))
-    F(op2.direct(op1.direct(VectorData(np.array([1,-4.46])))))
+    F(op2.direct(op1.direct(VectorData(np.array([1,-4.47])))))
+
+    c = np.array([1,-4.47])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
 
 
-class MyMatrixOperator(LinearOperator):
+    vs = np.arange(-15,20,0.5)
+    fs = np.zeros(vs.shape)
+    for i,v in enumerate(vs):
+        fs[i] = F(op2.direct(op1.direct(VectorData(np.array([1,v])))))
+    plt.plot(vs,fs)
+    plt.title("TV vs. c[1]")
+
+
+# class ESCMatrixOperator(LinearOperator):
+#     def __init__(self, A, domain_geometry, range_geometry, order='C'):
+#         """
+#         Custom matrix operator for ESC.
+
+#         Parameters:
+#         A (ndarray): The matrix to apply in the direct and adjoint operations.
+#         domain_geometry: VectorGeometry of the linear coefficients
+#         range_geometry: ImageGeometry of the linear combination of basis images
+#         order (str): The order of flattening and reshaping operations.
+#                      'C' for row-major (C-style),
+#                      'F' for column-major (Fortran-style).
+#         """
+#         super(ESCMatrixOperator, self).__init__(domain_geometry=domain_geometry, 
+#                                                range_geometry=range_geometry)
+#         self.A = A
+#         self.order = order
+
+#     def direct(self, x, out=None):
+#         flattened_x = x.as_array().flatten(order=self.order)
+#         result_1d = np.dot(self.A, flattened_x)
+#         result_2d = result_1d.reshape((self.range_geometry().voxel_num_y, 
+#                                         self.range_geometry().voxel_num_x), 
+#                                        order=self.order)
+
+#         if out is None:
+#             result = self.range_geometry().allocate()
+#             result.fill(result_2d)
+#             return result
+#         else:
+#             out.fill(result_2d)
+
+#     def adjoint(self, y, out=None):
+#         flattened_y = y.as_array().flatten(order=self.order)
+#         result_1d = np.dot(self.A.T, flattened_y)
+
+#         if out is None:
+#             result = self.domain_geometry().allocate()
+#             result.fill(result_1d)
+#             return result
+#         else:
+#             out.fill(result_1d)
+
+class ESCMatrixOperator(LinearOperator):
     def __init__(self, A, domain_geometry, range_geometry, order='C'):
         """
-        Custom linear operator that applies a matrix A to an input array.
+        Custom matrix operator for ESC.
 
         Parameters:
         A (ndarray): The matrix to apply in the direct and adjoint operations.
-        domain_geometry (ImageGeometry): The geometry of the input space.
-        range_geometry (ImageGeometry): The geometry of the output space.
+        domain_geometry: VectorGeometry of the linear coefficients
+        range_geometry: ImageGeometry of the linear combination of basis images
         order (str): The order of flattening and reshaping operations.
                      'C' for row-major (C-style),
                      'F' for column-major (Fortran-style).
         """
-        super(MyMatrixOperator, self).__init__(domain_geometry=domain_geometry, 
-                                               range_geometry=range_geometry)
+        super(ESCMatrixOperator, self).__init__(domain_geometry=domain_geometry, 
+                                                range_geometry=range_geometry)
         self.A = A
         self.order = order
 
     def direct(self, x, out=None):
-        flattened_x = x.as_array().flatten(order=self.order)
-        result_1d = np.dot(self.A, flattened_x)
+        result_1d = np.dot(self.A, x.as_array())
         result_2d = result_1d.reshape((self.range_geometry().voxel_num_y, 
-                                        self.range_geometry().voxel_num_x), 
-                                       order=self.order)
+                                       self.range_geometry().voxel_num_x), 
+                                      order=self.order)
 
         if out is None:
-            result = self.range_geometry().allocate()
-            result.fill(result_2d)
-            return result
+            tmp = self.range_geometry().allocate()
+            tmp.fill(result_2d)
+            return tmp
         else:
             out.fill(result_2d)
 
     def adjoint(self, y, out=None):
         flattened_y = y.as_array().flatten(order=self.order)
-        result_1d = np.dot(self.A.T, flattened_y)
+        result = np.dot(self.A.T, flattened_y)
 
         if out is None:
-            result = self.domain_geometry().allocate()
-            result.fill(result_1d)
-            return result
+            tmp = self.domain_geometry().allocate()
+            tmp.fill(result)
+            return tmp
         else:
-            out.fill(result_1d)
+            out.fill(result)
 
 class MyCustomOperator(LinearOperator):
     def __init__(self, A, domain_geometry, range_geometry, order):

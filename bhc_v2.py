@@ -127,11 +127,21 @@ def clip_otsu_segment(recon, ig, clip=True, title=''):
     show2D(segmented, title=title)
     return segmented
 
+def clip_otsu_segment2(recon, ig, clip=True, title=''):
+    if clip:
+        tau = threshold_otsu(np.clip(recon,a_min=0,a_max=None))
+    else:
+        tau = threshold_otsu(recon)
+    
+    segmented = ImageData(array=np.array(recon > tau, dtype='float32'), geometry=ig)
+    show2D(segmented, title=title)
+    return segmented
+
 def bhc_v2(path_lengths, data, f_mono, f_poly, num_bins, mask=None, weight_fun=np.sqrt, color_norm='log'):
     # mask: logical array of same shape as data
     if mask is None:
-        x = x = np.array(path_lengths.as_array())
-        y = np.array(data.as_array())
+        x = np.array(path_lengths.as_array()).flatten()
+        y = np.array(data.as_array()).flatten()
     else:
         x = np.array(path_lengths.as_array()[mask])
         y = np.array(data.as_array()[mask])
@@ -185,14 +195,122 @@ def bhc_v2(path_lengths, data, f_mono, f_poly, num_bins, mask=None, weight_fun=n
     recon_bhc = FDK(data_bhc).run()
     return data_bhc, recon_bhc
 
+
+class BHC:
+    def __init__(self, path_lengths, data, f_mono, f_poly, num_bins, mask=None, weight_fun=np.sqrt, color_norm='log', n_poly=None):
+        self.path_lengths = path_lengths
+        self.data = data
+        self.f_mono = f_mono
+        self.f_poly = f_poly
+        self.num_bins = num_bins
+        self.mask = mask
+        self.weight_fun = weight_fun
+        self.color_norm = color_norm
+        self.n_poly = n_poly
+        self.popt_poly = None
+        self.popt_mono = None
+        self.data_bhc = None
+        self.recon_bhc = None
+        self.x_centers_flat = None
+        self.y_centers_flat = None
+        self.counts_flat = None
+
+        if f_mono is None:
+            def f_mono(x, a):
+                return a*x
+            self.f_mono = f_mono
+
+    def prepare_data(self):
+        if self.mask is None:
+            x = np.array(self.path_lengths.as_array()).flatten()
+            y = np.array(self.data.as_array()).flatten()
+        else:
+            x = np.array(self.path_lengths.as_array()[self.mask])
+            y = np.array(self.data.as_array()[self.mask])
+        return x, y
+
+    def plot_histogram(self, x, y):
+        norms = {'lin': Normalize(), 'log': LogNorm()}
+        counts, x_edges, y_edges, _ = plt.hist2d(x, y, bins=self.num_bins, range=[[0, x.max()], [0, y.max()]], norm=norms[self.color_norm])
+        plt.xlabel('Path length')
+        plt.ylabel('Absorption')
+        plt.colorbar()
+        return counts, x_edges, y_edges
+
+    def calculate_fit_data(self, counts, x_edges, y_edges):
+        x_centers = 0.5 * (x_edges[1:] + x_edges[:-1])
+        y_centers = 0.5 * (y_edges[1:] + y_edges[:-1])
+        y_centers, x_centers = np.meshgrid(y_centers, x_centers)
+        self.x_centers_flat = x_centers.flatten()
+        self.y_centers_flat = y_centers.flatten()
+        self.counts_flat = counts.flatten()
+
+    def perform_fit(self):
+        nonzero_counts = self.counts_flat > 0
+        x_fit = self.x_centers_flat[nonzero_counts]
+        y_fit = self.y_centers_flat[nonzero_counts]
+        counts_fit = self.counts_flat[nonzero_counts]
+        weights = self.weight_fun(counts_fit)
+        
+        self.popt_mono, _ = curve_fit(self.f_mono, x_fit, y_fit, sigma=1./weights, absolute_sigma=True)
+        if self.n_poly is not None:
+            p0 = np.ones(self.n_poly)
+        else:
+            p0 = None
+        self.popt_poly, _ = curve_fit(self.f_poly, y_fit, x_fit, p0=p0, sigma=1./weights, absolute_sigma=True)
+
+    def plot_fits(self, show_hist=True, make_trans_plot=True, **kwargs):
+        xx = np.linspace(0, self.data.max() / self.popt_mono)
+        yy = np.linspace(0, self.data.max())
+        y_mono = self.f_mono(xx, *self.popt_mono)
+        x_poly = self.f_poly(yy, *self.popt_poly)
+        lw = 3
+        if not kwargs:
+            plt.plot(x_poly, yy, label='Poly fit', color='red', linewidth=lw)
+            plt.title('Fit used for linearization')
+        else:
+            plt.plot(x_poly, yy, **kwargs)
+        
+        if show_hist:
+            plt.show()
+        if make_trans_plot:
+            plt.plot(yy, self.f_mono(x_poly, *self.popt_mono))
+            plt.title('BHC absorptions vs Original absorptions')
+            plt.grid(True)
+            plt.show()
+
+    def perform_correction(self):
+        data_x_poly = self.f_poly(self.data.as_array(), *self.popt_poly)
+        data_y_mono = self.f_mono(data_x_poly, *self.popt_mono)
+        self.data_bhc = AcquisitionData(array=np.array(data_y_mono, dtype='float32'), geometry=self.data.geometry)
+        self.recon_bhc = FDK(self.data_bhc).run()
+
+    def run(self):
+        x, y = self.prepare_data()
+        counts, x_edges, y_edges = self.plot_histogram(x, y)
+        self.calculate_fit_data(counts, x_edges, y_edges)
+        self.perform_fit()
+        self.plot_fits()
+        self.perform_correction()
+        return self.data_bhc, self.recon_bhc
+    
+    ### Auxiliary function for extended work on the hist plot
+    def get_hist_fit_plot(self):
+        x, y = self.prepare_data()
+        counts, x_edges, y_edges = self.plot_histogram(x, y)
+        self.calculate_fit_data(counts, x_edges, y_edges)
+        self.perform_fit()
+        # self.plot_fits(show_hist=False, make_trans_plot=False)
+
 def testing():
     data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
     ag = data.geometry
     ig = ag.get_ImageGeometry()
 
     A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
     recon = FDK(data).run()
-    segmented = clip_otsu_segment(recon, ig, title='Otsu segmentation on initial FDK', clip=1)
+    segmented = clip_otsu_segment(recon, ig, title='Otsu segmentation on initial FDK', clip=0)
     path_lengths = A.direct(segmented)
 
     mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
@@ -203,7 +321,47 @@ def testing():
     def f_poly2(x, a,b):
         return a*x**5 + b*x
     def f_poly3(x, a,b):
-        return a*x**5
+        return a*x**3
+    data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly3, num_bins=100, mask=mask)
+    cmap = ['grey', 'viridis', 'nipy_spectral', 'turbo', 'gnuplot2'][0]
+    # show2D(recon_bhc, cmap=cmap)
+    show2D(recon_bhc, fix_range=(-0.5,1))
+
+def testing2():
+    # data = load_centre('X20_cor.pkl')
+    data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run()
+    segmented = clip_otsu_segment(recon, ig, title='Otsu segmentation on initial FDK', clip=1)
+    path_lengths = A.direct(segmented)
+
+    mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+    def f_mono(x, a):
+        return a*x
+    def f_poly1(x, a,b,c):
+        return a*x**3 + b*x**2 + c*x
+    def f_poly2(x, a,b):
+        return a*x**2 + b*x
+    def f_poly3(x, a,b):
+        return a*x**3
+    data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly3, num_bins=100, mask=mask)
+    cmap = ['grey', 'viridis', 'nipy_spectral', 'turbo', 'gnuplot2'][0]
+    # show2D(recon_bhc, cmap=cmap)
+    show2D(recon_bhc, fix_range=(-0.5,1))
+
+    # segmented = np.abs(recon_bhc.as_array()) > 0.3
+    # 0.3 for X16, 0.13 for X20
+    seg_arr = recon_bhc.as_array() > 0.2
+    # seg_arr = np.abs(recon_bhc.as_array()) > 0.2
+    segmented = ImageData(array=np.array(
+        seg_arr,
+        dtype='float32'), geometry=ig)
+    show2D(segmented)
+    path_lengths = A.direct(segmented)
+    
     data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly3, num_bins=100, mask=mask)
     cmap = ['grey', 'viridis', 'nipy_spectral', 'turbo', 'gnuplot2'][0]
     # show2D(recon_bhc, cmap=cmap)
@@ -211,7 +369,8 @@ def testing():
 
 def bhc_v2_iter():
     def bhc_iteration(recon, it):
-        segmented = clip_otsu_segment(recon, ig, title=f'Otsu segmentation on iteration={it}', clip=1)
+        clip = 0
+        segmented = clip_otsu_segment(recon, ig, title=f'Otsu segmentation on iteration={it}', clip=clip)
         path_lengths = A.direct(segmented)
         mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
         data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly2, num_bins=100, mask=mask)
@@ -224,6 +383,7 @@ def bhc_v2_iter():
         return myFISTANN
     
     data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
     ag = data.geometry
     ig = ag.get_ImageGeometry()
 
@@ -234,7 +394,7 @@ def bhc_v2_iter():
     def f_poly2(x, a,b):
         return a*x**3 + b*x
     def f_poly3(x, a):
-        return a*x**5
+        return a*x**3
 
     ###
     # F = LeastSquares(A, data)
@@ -257,6 +417,37 @@ def bhc_v2_iter():
         recon = fistaNN.solution
         show2D(recon,f'fistaNN BHC reconstruction iteration={i}')
 
+def bhc_v2_iter_fdk():
+    def bhc_iteration(recon, it):
+        clip = 0
+        segmented = clip_otsu_segment(recon, ig, title=f'Otsu segmentation on iteration={it}', clip=clip)
+        path_lengths = A.direct(segmented)
+        mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
+        data_bhc, recon_bhc = bhc_v2(path_lengths, data, f_mono, f_poly2, num_bins=100, mask=mask)
+        # return FDK(data_bhc).
+    
+    data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    def f_mono(x, a):
+        return a*x
+    def f_poly1(x, a):
+        return a*x**2
+    def f_poly2(x, a,b):
+        return a*x**3 + b*x
+    def f_poly3(x, a):
+        return a*x**3
+
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run()
+    for i in range(1,3):
+    # for i in range(5,9):
+        fistaNN = bhc_iteration(recon,it=i)
+        fistaNN.run(100, verbose=1)
+        recon = fistaNN.solution
+        show2D(recon,f'fistaNN BHC reconstruction iteration={i}')
 
 def bhc_v2_dev():
     data = load_centre('X20_cor.pkl')

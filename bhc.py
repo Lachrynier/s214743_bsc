@@ -285,7 +285,8 @@ def make_projection_plot(
         data,image,angle_idx,horizontal_idxs,
         show_source=False,scale_proj_axis=1.2,scale_factor=1.8,
         ray_opacity=0.5,ray_thickness=1.5,scale_abs=0.3,
-        random_colors=True,max_type='absorption',axis_color='black'
+        random_colors=True,max_type='absorption',axis_color='black',
+        scale_factor_x=None,scale_factor_y=None
     ):
     # currently assumes orthogonality of center ray with detector panel. that is detector_direction_x = [1,0]
     def R_to_plot(vec):
@@ -336,7 +337,7 @@ def make_projection_plot(
     L = np.linalg.norm(detector_position-source_position,2)
     
     ###
-    def horizontal_to_proj(horizontal,scale):
+    def horizontal_to_proj(horizontal,scale,proj_abs=None):
         panel_pixel_position = detector_position + detector_direction_x * panel_pixel_size * ( -(panel_num_pixels[0]-1)/2 + horizontal )
         rot_panel_pixel_R = rot_mat_angle.T @ (panel_pixel_position + shift_rot_axis_origin)
         rot_panel_pixel = rot_panel_pixel_R - shift_rot_axis_origin
@@ -352,7 +353,8 @@ def make_projection_plot(
         if scale == None:
             proj_y_R = None
         else:
-            proj_abs = data.as_array()[angle_idx,horizontal]
+            if not proj_abs:
+                proj_abs = data.as_array()[angle_idx,horizontal]
             # proj_y_R = proj_x_R + 0.1*image_max_side * n
             proj_y_R = proj_x_R + scale*image_max_side * proj_abs/max_abs * n
 
@@ -392,18 +394,28 @@ def make_projection_plot(
         plot_ys.append(R_to_plot(proj_y_R)[1])
         # plt.legend(loc='upper left')
 
-    plt.plot(plot_xs,plot_ys,'-o',color='cyan',markersize=2,label=f'Maximum visible absorption: {max_abs:.3f}')
+    # plt.plot(plot_xs,plot_ys,'-o',color='cyan',markersize=2,label=f'Maximum visible absorption: {max_abs:.3f}')
+    plt.plot(plot_xs,plot_ys,'-o',color='cyan',markersize=2,label=f'Absorption values')
 
     left_end,_ = horizontal_to_proj(0-0.5,scale=None)
     right_end,_ = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=None)
-    plt.plot(*zip(R_to_plot(left_end),R_to_plot(right_end)),'-',color=axis_color)
+    plt.plot(*zip(R_to_plot(left_end),R_to_plot(right_end)),'-',color=axis_color,label=f'Absorption={0*max_abs:.2f}')
+
+    ### upper bar
+    max_pad = 1.1
+    _,top_left_end = horizontal_to_proj(0-0.5,scale=scale_abs,proj_abs=1.1*max_abs)
+    _,top_right_end = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=scale_abs,proj_abs=1.1*max_abs)
+    plt.plot(*zip(R_to_plot(top_left_end),R_to_plot(top_right_end)),'--',color=axis_color,label=f'Absorption={max_pad*max_abs:.2f}')
+    ###
 
     # Calculate new limits
-    new_xlims = ((xlims[0] + xlims[1]) / 2 - (xlims[1] - xlims[0]) / 2 * scale_factor, 
-                (xlims[0] + xlims[1]) / 2 + (xlims[1] - xlims[0]) / 2 * scale_factor)
+    if not scale_factor_x: scale_factor_x = scale_factor
+    if not scale_factor_y: scale_factor_y = scale_factor
+    new_xlims = ((xlims[0] + xlims[1]) / 2 - (xlims[1] - xlims[0]) / 2 * scale_factor_x, 
+                (xlims[0] + xlims[1]) / 2 + (xlims[1] - xlims[0]) / 2 * scale_factor_x)
 
-    new_ylims = ((ylims[0] + ylims[1]) / 2 - (ylims[1] - ylims[0]) / 2 * scale_factor, 
-                (ylims[0] + ylims[1]) / 2 + (ylims[1] - ylims[0]) / 2 * scale_factor)
+    new_ylims = ((ylims[0] + ylims[1]) / 2 - (ylims[1] - ylims[0]) / 2 * scale_factor_y, 
+                (ylims[0] + ylims[1]) / 2 + (ylims[1] - ylims[0]) / 2 * scale_factor_y)
     if not show_source:
         plt.xlim(new_xlims)
         plt.ylim(new_ylims)
@@ -785,10 +797,11 @@ def test_proj_plot_X16():
     idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
     print(np.mod(ag.angles[idx_chosen_angle], 360))
     horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,100)).astype(int)
-    horizontal_idxs = np.arange(1010,1125)
+    horizontal_idxs = np.arange(1010-10,1125+10)
     make_projection_plot(
         data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
-        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.1
+        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.1,
+        scale_factor_y=0.4
     )
     ###
     # chosen_angle = -3.2+90+180 -0
@@ -802,6 +815,13 @@ def test_proj_plot_X16():
         data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
         scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.3
     )
+
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.14,
+        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.3
+    )
+
+    show1D(data,slice_list=[('angle', 300)])
 
 def test_proj_plot_X20():
     data = load_centre('X20_cor.pkl')

@@ -49,6 +49,10 @@ base_dir = os.path.abspath('/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev
 
 from skimage.filters import threshold_otsu
 
+from bhc_v2 import load_centre, BHC
+from matplotlib.colors import Normalize,LogNorm
+
+
 def spectrum_penetration_plot():
     mu = fun_attenuation(plot=False)
     bin_centers, bin_heights = generate_spectrum(plot=False,filter=0,tube_potential=200,bin_width=0.01)
@@ -589,7 +593,96 @@ def bh_rings():
     plt.subplots_adjust(top=0.85)
     plt.savefig(os.path.join(base_dir, 'plots/bh_rings.pdf'))
     plt.show()
-    
+
+
+def bh_slit():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_slit_3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    b = generate_bh_data(im, ag, ig)
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+
+############# Plotting
+    from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
+    fig = plt.figure(figsize=(10,14))
+    gs = GridSpec(4, 1, height_ratios=[1.5,1.5, 1, 1])
+
+    # Create a nested 1x2 grid in the first part of the 2x1 grid
+    # top_row_gs = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[0])
+    ax = [None] * 4
+    ax[0] = fig.add_subplot(gs[0])
+    ax[1] = fig.add_subplot(gs[1])
+    ax[2] = fig.add_subplot(gs[2])
+    ax[3] = fig.add_subplot(gs[3])
+
+    hy_range = [350,600]
+    # hy_range = [0,1000]
+    hx_range = [100,900]
+    plt.sca(ax[0])
+    im0 = plt.imshow(im_arr[hy_range[0]:hy_range[1],hx_range[0]:hx_range[1]], origin='lower',cmap='grey')
+    # plt.imshow(im_arr, origin='lower',cmap='grey')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('Slit test image')
+    # plt.colorbar()
+    plt.colorbar(im0,fraction=0.046, pad=0.04)
+
+    plt.sca(ax[1])
+    im1 = plt.imshow(recon.as_array()[hy_range[0]:hy_range[1],hx_range[0]:hx_range[1]], origin='lower', cmap='gray')#,vmin=-10, vmax=10)
+    # plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title('FBP reconstruction')
+    # plt.colorbar()
+    plt.colorbar(im1,fraction=0.046, pad=0.04)
+
+    hori_idx = 125
+    hori_idx += hy_range[0]
+    plt.sca(ax[2])
+    # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    plt.plot(recon.as_array()[hori_idx,hx_range[0]:hx_range[1]]) # horizontal_y fixed
+    plt.xlabel('horizontal_x')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx-hy_range[0]} on the reconstruction')
+    plt.grid(True)
+
+    # hori_idx = 75
+    # hori_idx += hy_range[0]
+    # plt.sca(ax[3])
+    # # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    # plt.plot(recon.as_array()[hori_idx,hx_range[0]:hx_range[1]]) # horizontal_y fixed
+    # plt.xlabel('horizontal_x')
+    # plt.title(f'Intensity profile for horizontal_y={hori_idx-hy_range[0]} on the reconstruction')
+    # plt.grid(True)
+
+    # hori_idx = 390
+    # hori_idx = 140
+    hori_idx = 645
+    hori_idx += hx_range[0]
+    plt.sca(ax[3])
+    # plt.plot(recon.as_array()[:,hori_idx]) # horizontal_x fixed
+    plt.plot(recon.as_array()[hy_range[0]:hy_range[1],hori_idx]) # horizontal_y fixed
+    plt.xlabel('horizontal_y')
+    plt.title(f'Intensity profile for horizontal_y={hori_idx-hx_range[0]} on the reconstruction')
+    plt.grid(True)
+
+    # plt.sca(ax[3])
+    # # plt.plot(im.as_array()[:,hori_idx]) # horizontal_x fixed
+    # plt.plot(im.as_array()[hori_idx,:]) # horizontal_y fixed
+    # plt.xlabel('horizontal_x')
+    # plt.title(f'Intensity profile for horizontal_y={hori_idx-hy_range[0]} on the original image')
+    # plt.grid(True)
+
+    plt.tight_layout(pad=0, h_pad=1.3)
+    # plt.tight_layout()
+    # plt.subplots_adjust(top=0.85)
+    plt.savefig(os.path.join(base_dir, 'plots/bh_slit.pdf'))
+    plt.show()
+
 def bh_shapes():
     physical_size = 1
     voxel_num = 1000
@@ -849,3 +942,124 @@ def X20_raw_proj():
     plt.tight_layout()
     plt.savefig(os.path.join(base_dir, 'plots/X20_raw_proj.pdf'), format='pdf', dpi=300)
     plt.show()
+
+
+###
+def clip_otsu_segment(recon, ig, clip=True):
+    if clip:
+        tau = threshold_otsu(np.clip(recon,a_min=0,a_max=None))
+    else:
+        tau = threshold_otsu(recon)
+    
+    segmented = ImageData(array=np.array(recon > tau, dtype='float32'), geometry=ig)
+    return segmented
+def compare_otsu_segmentation():
+    data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run()
+
+    figsize = [(14,6), (12,5)][1]
+    fig, ax = plt.subplots(1, 2, figsize=figsize)
+    otsu_seg = clip_otsu_segment(recon.as_array(), ig, clip=0)
+    # otsu_abs = clip_otsu_segment(np.abs(recon.as_array()), ig, clip=0)
+    ax[0].set_xlabel('horizontal_x')
+    ax[0].set_ylabel('horizontal_y')
+    ax[0].imshow(otsu_seg.as_array(), origin='lower', cmap='gray')
+    ax[0].set_title('Otsu segmentation on initial FDK center slice')
+    
+    
+    path_lengths = A.direct(otsu_seg)
+    mask = (path_lengths.as_array() > 0) & (data.as_array() > 0.25)
+    x = np.array(path_lengths.as_array()[mask])
+    y = np.array(data.as_array()[mask])
+    norms = {'lin': Normalize(), 'log': LogNorm()}
+    color_norm = 'log'
+    counts, x_edges, y_edges, _ = plt.hist2d(x,y,bins=100, range=[[0,x.max()],[0,y.max()]], norm=norms[color_norm])
+
+    plt.sca(ax[1])
+    plt.xlabel('Path length')
+    plt.ylabel('Absorption')
+    plt.title('Filtered 2D histogram')
+    plt.colorbar()
+    plt.tight_layout()
+    # plt.subplots_adjust(top=0.85)
+    plt.savefig(os.path.join(base_dir, 'plots/X20_initial_otsu_2Dhist.pdf'))
+    plt.show()
+    
+
+    plt.figure()
+    plt.hist(recon.as_array().flatten(),bins=50)
+    plt.title('Histogram of initial FDK center slice')
+    plt.yscale('log')
+    plt.grid(True)
+    plt.savefig(os.path.join(base_dir, 'plots/X20_initial_hist.pdf'))
+    plt.show()
+
+def compare_BHC_fits():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run()
+    segmentation = clip_otsu_segment(recon.as_array(), ig, clip=0)
+    path_lengths = A.direct(segmentation)
+
+    mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+    def f_poly1(x, *a):
+        return a[0]*x**3
+    def f_poly2(x, *a):
+        return a[0]*x**5
+    
+    shift = 0.05
+    const = np.log10(shift)
+    def f_poly3(x, *a):
+        # return a[0]*np.log10(x+0.1) + 1
+        # return 10**((x-1)/a[0])-0.1
+        return 10**((x+const)/a[0]) - shift
+
+    bhc = BHC(path_lengths, data, None, f_poly1, num_bins=100, mask=mask, n_poly=1)
+    bhc.get_hist_fit_plot()
+    bhc.plot_fits(show_hist=False, make_trans_plot=False, label=r'$cx^3$', linewidth=3, color='red')
+    print(bhc.popt_poly)
+    
+    bhc.f_poly = f_poly2
+    bhc.perform_fit()
+    bhc.plot_fits(show_hist=False, make_trans_plot=False, label=r'$cx^5$', linewidth=3, color='magenta')
+    print(bhc.popt_poly)
+
+    bhc.f_poly = f_poly3
+    # bhc.n_poly = 2
+    bhc.perform_fit()
+    bhc.plot_fits(show_hist=False, make_trans_plot=False, label=rf'$10^{{(x+\log_{{10}}({shift}))/c}} - {shift}$', linewidth=3, color='black')
+    print(bhc.popt_poly)
+
+    plt.legend(loc='lower right')
+    plt.title(r'Comparing different $f_p$ fits')
+    # plt.savefig(os.path.join(base_dir, 'X20_comparing_poly_fits.pdf'))
+    plt.show()
+
+    bhc.f_poly = f_poly1
+    _,recon1 = bhc.run()
+
+    bhc.f_poly = f_poly2
+    _,recon2 = bhc.run()
+
+    bhc.f_poly = f_poly3
+    _,recon3 = bhc.run()
+    
+    show2D(recon1)
+    show2D(recon2)
+    show2D(recon3)
+
+    # bhc.
+    # data_bhc, recon_bhc = BHC(path_lengths, data, None, f_poly3, num_bins=100, mask=mask).run()
+    # show2D(recon_bhc)
