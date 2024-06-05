@@ -1044,22 +1044,83 @@ def compare_BHC_fits():
 
     plt.legend(loc='lower right')
     plt.title(r'Comparing different $f_p$ fits')
-    # plt.savefig(os.path.join(base_dir, 'X20_comparing_poly_fits.pdf'))
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_comparing_poly_fits.pdf'))
     plt.show()
 
     bhc.f_poly = f_poly1
-    _,recon1 = bhc.run()
+    _,recon1 = bhc.run(verbose=0)
 
     bhc.f_poly = f_poly2
-    _,recon2 = bhc.run()
+    _,recon2 = bhc.run(verbose=0)
 
     bhc.f_poly = f_poly3
-    _,recon3 = bhc.run()
+    _,recon3 = bhc.run(verbose=0)
     
-    show2D(recon1)
-    show2D(recon2)
-    show2D(recon3)
+    # show2D(recon1)
+    # show2D(recon2)
+    # show2D(recon3)
 
-    # bhc.
-    # data_bhc, recon_bhc = BHC(path_lengths, data, None, f_poly3, num_bins=100, mask=mask).run()
-    # show2D(recon_bhc)
+
+
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    # figsize = [(14,6), (12,5)][1]
+    figsize = [(9,8)][0]
+    fig, ax = plt.subplots(2,1, figsize=figsize)
+
+    hori_x_slice = slice(300,750)
+    plt.sca(ax[0])
+    plt.imshow(recon1.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^3$')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon2.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^5$')
+    plt.colorbar()
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_poly_recons.pdf'))
+    plt.show()
+
+
+    ############### 3 instead
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    # figsize = [(14,6), (12,5)][1]
+    figsize = [(9,12)][0]
+    fig, ax = plt.subplots(3,1, figsize=figsize)
+
+    hori_x_slice = slice(300,750)
+    plt.sca(ax[0])
+    plt.imshow(recon1.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^3$')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon2.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^5$')
+    plt.colorbar()
+
+    plt.sca(ax[2])
+    plt.imshow(recon3.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^5$')
+    plt.colorbar()
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_poly_recons.pdf'))
+    plt.show()

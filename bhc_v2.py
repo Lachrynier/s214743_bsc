@@ -285,12 +285,16 @@ class BHC:
         self.data_bhc = AcquisitionData(array=np.array(data_y_mono, dtype='float32'), geometry=self.data.geometry)
         self.recon_bhc = FDK(self.data_bhc).run()
 
-    def run(self):
+    def run(self, verbose=1):
         x, y = self.prepare_data()
         counts, x_edges, y_edges = self.plot_histogram(x, y)
         self.calculate_fit_data(counts, x_edges, y_edges)
         self.perform_fit()
-        self.plot_fits()
+        if verbose == 1:
+            self.plot_fits()
+        else:
+            self.plot_fits(show_hist=False,make_trans_plot=False)
+            plt.close()
         self.perform_correction()
         return self.data_bhc, self.recon_bhc
     
