@@ -51,6 +51,7 @@ from skimage.filters import threshold_otsu
 
 from bhc_v2 import load_centre, BHC
 from matplotlib.colors import Normalize,LogNorm
+from sim_main import lin_interp_sino2D
 
 
 def spectrum_penetration_plot():
@@ -1124,3 +1125,280 @@ def compare_BHC_fits():
     plt.tight_layout()
     # plt.savefig(os.path.join(base_dir, 'plots/X20_poly_recons.pdf'))
     plt.show()
+
+
+def photon_shapes():
+    # data = load_centre('X20_cor.pkl')
+    # ag = data.geometry
+    # ig = ag.get_ImageGeometry()
+
+    physical_size = 0.2
+    # physical_size = 0.5
+    # physical_size = 0.01
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=physical_size,voxel_num=voxel_num)
+
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_image_shapes3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    show2D(im)
+
+    mu = fun_attenuation(plot=False)
+    bin_centers, bin_heights = generate_spectrum(plot=False,filter=0.0)
+    mu_eff = np.sum(bin_heights * mu(bin_centers))
+    # mu_eff = 19
+    d = A.direct(im)#/10000
+    trans = np.exp(-d*mu_eff)
+    I0 = 60000.0
+    # I0 = 100.0
+    I_noisy = np.random.poisson(lam=I0*trans.as_array())
+
+    plt.plot(d.as_array().flatten(),I_noisy.flatten(),'.')
+    plt.show()
+    print(f'min count: {np.min(I_noisy)}')
+
+    b = AcquisitionData(array=d*mu_eff, geometry=ag)
+    eps = 0*1e-6
+    b_noisy = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I_noisy/I0+eps, dtype='float32'), geometry=ag))
+    # b_noisy = AcquisitionData(array=np.array(-np.log(I_noisy/I0),dtype='float32'), geometry=ag)
+    
+    plt.plot(d.as_array().flatten(),b_noisy.as_array().flatten(),'.')
+    plt.show()
+
+    recon = FBP(b, image_geometry=ig).run(verbose=0)
+    show2D(recon, title='recon')
+    recon_noisy = FBP(b_noisy, image_geometry=ig).run(verbose=0)
+    show2D(recon_noisy, title='recon_noisy')
+
+    tau = -np.log(eps)*0.9
+    tau = 7
+    b_interp = lin_interp_sino2D(b_noisy, tau)
+    recon_interp = FBP(b_interp, image_geometry=ig).run(verbose=0)
+    show2D(recon_interp)
+
+    plt.hist(recon.as_array().flatten(), bins=100)
+    plt.show()
+    plt.hist(recon_noisy.as_array().flatten(), bins=100)
+    # plt.show()
+    plt.hist(recon_interp.as_array().flatten(), bins=100)
+    plt.show()
+
+def photon_shapes_bhc():
+    # data = load_centre('X20_cor.pkl')
+    # ag = data.geometry
+    # ig = ag.get_ImageGeometry()
+
+    # physical_size = 0.2
+    physical_size = 0.3
+    # physical_size = 0.01
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=physical_size,voxel_num=voxel_num)
+
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    
+    im_arr = io.imread(os.path.join(base_dir,'test_images/test_image_shapes3.png'))
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    show2D(im)
+
+    mu = fun_attenuation(plot=False)
+    bin_centers, bin_heights = generate_spectrum(plot=False,filter=0.0)
+    mu_eff = np.sum(bin_heights * mu(bin_centers))
+    # mu_eff = 19
+    d = A.direct(im)#/10000
+    trans = np.exp(-d*mu_eff)
+    # I0 = 1e5
+    I0 = 60000.0
+    # I0 = 100.0
+    I_noisy = np.random.poisson(lam=I0*trans.as_array())
+
+    plt.plot(d.as_array().flatten(),I_noisy.flatten(),'.')
+    plt.show()
+    print(f'min count: {np.min(I_noisy)}')
+
+    b = AcquisitionData(array=d*mu_eff, geometry=ag)
+    eps = 1e-10
+    b_noisy = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I_noisy/I0+eps, dtype='float32'), geometry=ag))
+    # b_noisy = AcquisitionData(array=np.array(-np.log(I_noisy/I0),dtype='float32'), geometry=ag)
+    
+    fig,ax = plt.subplots(figsize=(10,6))
+    plt.sca(ax)
+    plt.plot(d.as_array().flatten(),b_noisy.as_array().flatten(),'k.', alpha=0.3, markersize=3)
+    plt.title('Noisy absorption data as function of ground truth path lengths')
+    plt.grid(True)
+    plt.xlabel('mm')
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_noisy_abs.png'))
+    plt.show()
+
+    # recon = FBP(b, image_geometry=ig).run(verbose=0)
+    # show2D(recon, title='recon')
+    recon_noisy = FBP(b_noisy, image_geometry=ig).run(verbose=0)
+    show2D(recon_noisy, title='FBP reconstruction of noisy data')
+
+    tau = -np.log(eps)*0.9
+    tau = 7
+    b_interp = lin_interp_sino2D(b_noisy, tau)
+    recon_interp = FBP(b_interp, image_geometry=ig).run(verbose=0)
+    show2D(recon_interp, title='FBP reconstruction of interpolated noisy data')
+
+    ######
+    fig, ax = plt.subplots(1, 2, figsize=(10, 7))
+    
+    im0 = ax[0].imshow(recon_noisy.as_array(), cmap='gray', origin='lower')
+    ax[0].set_title('Noisy data')
+    fig.colorbar(im0, ax=ax[0], location='bottom')
+    
+    im1 = ax[1].imshow(recon_interp.as_array(), cmap='gray', origin='lower')
+    ax[1].set_title('Interpolated noisy data')
+    fig.colorbar(im1, ax=ax[1], location='bottom')
+
+    fig.suptitle('FBP reconstructions', fontsize=16)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_recons.pdf'))
+    plt.show()
+    #########
+
+
+    # plt.hist(recon.as_array().flatten(), bins=100)
+    # plt.show()
+
+    fig,ax = plt.subplots(figsize=(10,6))
+    plt.sca(ax)
+    plt.hist(recon_noisy.as_array().flatten(), bins=200, label='Interpolated noisy data')
+    # plt.show()
+    plt.hist(recon_interp.as_array().flatten(), bins=100, label='Noisy data',alpha=0.7,color='red')
+    plt.yscale('log')
+    plt.title('Histograms of FBP reconstructions')
+    plt.xlabel('Intensity')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_hists.pdf'))
+    plt.show()
+
+    tau_noisy = threshold_otsu(recon_noisy.as_array())
+    tau_interp = threshold_otsu(recon_interp.as_array())
+    print(f'tau_noisy, tau_interp = {tau_noisy}, {tau_interp}')
+
+    segm_noisy = recon_noisy > tau_noisy
+    segm_interp = recon_interp > tau_interp
+    # show2D([segm_noisy,segm_interp], title=['title1','title2'])
+
+    #########
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    
+    ax[0].imshow(segm_noisy, cmap='gray', origin='lower')
+    ax[0].set_title('Noisy data')
+    
+    ax[1].imshow(segm_interp, cmap='gray', origin='lower')
+    ax[1].set_title('Interpolated noisy data')
+    fig.suptitle('Otsu segmentations', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_segms.pdf'))
+    plt.show()
+    ########
+
+
+def test_linear_interpolation():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    def compare_lin_interp(ang_idx,indices=None,save=False):
+        n_rays = data.shape[1]
+        if indices is None:
+            indices = np.arange(0,n_rays)
+        plt.figure(figsize=(10,8))
+        plt.title(f'Single projection at angle_index={ang_idx}')
+        plt.xlabel('Panel index')
+        plt.ylabel('Absorption')
+        plt.plot([indices.min(),indices.max()],[tau,tau],label=r'$\tau$')
+        plt.plot(indices,data.as_array()[ang_idx,indices], label='Raw data', marker='.', markersize=8)
+        plt.plot(indices,data_interp.as_array()[ang_idx,indices], label='Interpolated data')
+        plt.legend()
+        plt.grid(True)
+        if save:
+            plt.savefig(os.path.join(base_dir, 'plots/lin_interp_example.pdf'))
+        plt.show()
+
+    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    # file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    
+    data_trans = AbsorptionTransmissionConverter()(data)
+    show2D(data_trans, cmap='nipy_spectral', fix_range=(data_trans.min(),0.5))
+
+    tau = 2.0
+    # tau = -np.log(0.115)
+    # tau = -np.log(0.13)
+    # tau = -np.log(0.15)
+    # tau = -np.log(0.07)
+    # show1D(data_trans, slice_list=[('angle', 480)])
+    # show1D(data, slice_list=[('angle', 800)])
+
+    data_interp = lin_interp_sino2D(data, tau)
+    ang_idx = 480
+    # show1D([data,data_interp], slice_list=[[('angle', ang_idx)],[('angle', ang_idx)]], line_styles=['-','-'])
+    indices = np.arange(275,750)
+    # compare_lin_interp(ang_idx,indices=indices)
+    # compare_lin_interp(530,indices=indices)
+    # compare_lin_interp(530,indices=np.arange(600,700),save=True)
+
+    recon = FDK(data).run(verbose=0)
+    recon_interp = FDK(data_interp).run(verbose=0)
+    show2D([recon,recon_interp],title=f'recon vs recon_interp for tau={tau}',fix_range=(-0.15,0.6))
+    show2D([recon,recon_interp],title=f'recon vs recon_interp for tau={tau}')
+
+    show2D(AbsorptionTransmissionConverter()(data_interp), cmap='nipy_spectral', fix_range=(data_trans.min(),0.5))
+
+    ##########
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    recon = FDK(data).run(verbose=0)
+    fig,ax = plt.subplots(4,1,figsize=(9,16))
+    # fig,ax = plt.subplots(2,2,figsize=(14,8))
+    hori_x_slice = slice(300,750)
+    fix_range = (-0.15,0.6)
+
+    plt.sca(ax.flatten()[0])
+    plt.imshow(recon.as_array()[hori_x_slice],origin='lower',cmap='gray',vmin=fix_range[0],vmax=fix_range[1])
+    plt.title('Raw data')
+
+    for i,tau in enumerate([2.2,2.0,1.9]):
+        data_interp = lin_interp_sino2D(data, tau)
+        recon_interp = FDK(data_interp).run(verbose=0)
+        plt.sca(ax.flatten()[i+1])
+        plt.imshow(recon_interp.as_array()[hori_x_slice],origin='lower',cmap='gray',vmin=fix_range[0],vmax=fix_range[1])
+        plt.title(rf'Linearly interpolated with $\tau = {tau}$')
+    
+    # plt.suptitle('FDK reconstructions', fontsize=24)
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'plots/X20_interp.pdf'))
+    plt.show()
+
+def single_projections():
+    def compare_lin_interp(ang_idx,indices=None,save=False):
+        n_rays = data.shape[1]
+        if indices is None:
+            indices = np.arange(0,n_rays)
+        plt.figure(figsize=(10,8))
+        plt.title(f'Single projection at angle_index={ang_idx}')
+        plt.xlabel('Panel index')
+        plt.ylabel('Absorption')
+        plt.plot(indices,data.as_array()[ang_idx,indices], marker='.', markersize=8)
+        plt.legend()
+        plt.grid(True)
+        if save:
+            plt.savefig(os.path.join(base_dir, 'plots/X20_single_projection.png'))
+        plt.show()
+    
+    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    # file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
