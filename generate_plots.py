@@ -52,6 +52,7 @@ from skimage.filters import threshold_otsu
 from bhc_v2 import load_centre, BHC
 from matplotlib.colors import Normalize,LogNorm
 from sim_main import lin_interp_sino2D
+from bhc import make_projection_plot
 
 
 def spectrum_penetration_plot():
@@ -1268,15 +1269,15 @@ def photon_shapes_bhc():
 
     fig,ax = plt.subplots(figsize=(10,6))
     plt.sca(ax)
-    plt.hist(recon_noisy.as_array().flatten(), bins=200, label='Interpolated noisy data')
+    plt.hist(recon_noisy.as_array().flatten(), bins=200, label='Noisy data')
     # plt.show()
-    plt.hist(recon_interp.as_array().flatten(), bins=100, label='Noisy data',alpha=0.7,color='red')
+    plt.hist(recon_interp.as_array().flatten(), bins=100, label='Interpolated noisy data',alpha=0.7,color='red')
     plt.yscale('log')
     plt.title('Histograms of FBP reconstructions')
     plt.xlabel('Intensity')
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_hists.pdf'))
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_hists.pdf'))
     plt.show()
 
     tau_noisy = threshold_otsu(recon_noisy.as_array())
@@ -1383,22 +1384,156 @@ def test_linear_interpolation():
     plt.show()
 
 def single_projections():
-    def compare_lin_interp(ang_idx,indices=None,save=False):
+    def show_proj(ang_idx,indices=None,save=False):
         n_rays = data.shape[1]
         if indices is None:
             indices = np.arange(0,n_rays)
-        plt.figure(figsize=(10,8))
+        plt.figure(figsize=(12,6))
         plt.title(f'Single projection at angle_index={ang_idx}')
         plt.xlabel('Panel index')
         plt.ylabel('Absorption')
-        plt.plot(indices,data.as_array()[ang_idx,indices], marker='.', markersize=8)
-        plt.legend()
+        plt.plot(indices,data.as_array()[ang_idx,indices])#, marker='.', markersize=8)
+        # plt.legend()
         plt.grid(True)
         if save:
-            plt.savefig(os.path.join(base_dir, 'plots/X20_single_projection.png'))
+            plt.savefig(os.path.join(base_dir, 'plots/X20_single_projection.pdf'))
         plt.show()
     
     file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
     # file_path = os.path.join(base_dir,'centres/X16_cor.pkl')
     with open(file_path, 'rb') as file:
         data = pickle.load(file)
+    
+    show_proj(900)
+    show_proj(480, np.arange(400,600), save=True)
+    show_proj(300, np.arange(500,600))
+
+def X16_embeddings():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    def normalize_angle(idx):
+        angle = np.mod(ag.angles[idx], 360)
+        if angle > 180:
+            angle -= 360
+        return angle
+    data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    recon = FDK(data).run(verbose=0)
+    hori_idx_slice = slice(750,1400)
+    fig,ax = plt.subplots(figsize=(12,5)); plt.sca(ax)
+    plt.imshow(recon.as_array()[hori_idx_slice], cmap='gray')
+    plt.title('FDK reconstruction of X16 center slice')
+    plt.colorbar(location='bottom')
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X16_center.pdf'))
+    plt.show()
+
+    detector_num_pixels = data.get_dimension_size('horizontal')
+
+    chosen_angle = -3.2
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+
+    # horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,20)).astype(int)
+    horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,100)).astype(int)
+    # horizontal_idxs = np.round(np.linspace(800,1200,20)).astype(int)
+    # make_projection_plot(data,recon,idx_chosen_angle,horizontal_idxs)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.1,
+        scale_proj_axis=0.13,ray_opacity=0.7,ray_thickness=1,scale_factor=1.0,
+        scale_factor_y=0.5, lims=[(0,2000), (400,1600)], show=False
+    )
+    plt.title(rf'Projection at angle ${normalize_angle(idx_chosen_angle):.2f}^\circ$')
+    plt.tight_layout()
+    fig = plt.gcf()
+    fig.set_size_inches(10, 6)
+    plt.savefig(os.path.join(base_dir, 'plots/X16_embed_short_side.pdf'))
+    plt.show()
+
+    chosen_angle = -3.2+90
+    # chosen_angle = -3.2
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,100)).astype(int)
+    horizontal_idxs = np.arange(1010-10,1125+10,3)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
+        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.1,
+        scale_factor_y=0.4, lims=[(0,2200),(750,1500)], show=False
+    )
+    plt.title(rf'Projection at angle ${normalize_angle(idx_chosen_angle):.2f}^\circ$')
+    plt.tight_layout()
+    fig = plt.gcf()
+    fig.set_size_inches(10, 4)
+    plt.savefig(os.path.join(base_dir, 'plots/X16_embed_long_side.pdf'))
+    plt.show()
+    ###
+    # chosen_angle = -3.2+90+180 -0
+    # chosen_angle = -3.2+70
+    chosen_angle = -3.2+60+180
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,500)).astype(int)
+    # horizontal_idxs = np.arange(1010,1125)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
+        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.3
+    )
+
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.14,
+        scale_proj_axis=0.85,ray_opacity=0.3,ray_thickness=0.3,scale_factor=1.3
+    )
+
+    show1D(data,slice_list=[('angle', 300)])
+
+def X20_embeddings():
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    recon = FDK(data).run()
+    detector_num_pixels = data.get_dimension_size('horizontal')
+
+    chosen_angle = 0
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.round(np.linspace(0,detector_num_pixels-1,300)).astype(int)
+    # horizontal_idxs = np.arange(300,700)
+    # horizontal_idxs = np.arange(498,500)
+    # horizontal_idxs = [498,499,500,501,502]
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.2,
+        scale_proj_axis=0.3,ray_opacity=0.3,ray_thickness=1,scale_factor=0.9)
+    
+    ###
+    chosen_angle = 180
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.arange(0,700)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
+        scale_proj_axis=0.08,ray_opacity=0.2,ray_thickness=1,lims=[(100,500),(350,650)])
+    
+    ###
+    idx_chosen_angle = 500
+    horizontal_idxs = np.arange(590,750)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.05,
+        scale_proj_axis=-0.3,ray_opacity=0.2,ray_thickness=1,lims=[(0,400),(400,650)])
+    
+    ###
+    chosen_angle = 120
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.arange(0,1000,3)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
+        scale_proj_axis=0.9,ray_opacity=0.2,ray_thickness=1,lims=[(100,1100),(0,800)])
+
+X20_embeddings()

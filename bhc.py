@@ -47,6 +47,7 @@ from cil.framework import ImageData, ImageGeometry, AcquisitionData, Acquisition
 from cil.utilities.noise import gaussian, poisson
 
 from sim_main import lin_interp_sino2D
+import itertools
 
 print(os.getcwd())
 if os.getcwd() == "/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev":
@@ -286,7 +287,8 @@ def make_projection_plot(
         show_source=False,scale_proj_axis=1.2,scale_factor=1.8,
         ray_opacity=0.5,ray_thickness=1.5,scale_abs=0.3,
         random_colors=True,max_type='absorption',axis_color='black',
-        scale_factor_x=None,scale_factor_y=None
+        bound_color='red', scale_factor_x=None,scale_factor_y=None,lims=None,
+        show=True
     ):
     # currently assumes orthogonality of center ray with detector panel. that is detector_direction_x = [1,0]
     def R_to_plot(vec):
@@ -306,7 +308,8 @@ def make_projection_plot(
     shift_image_origin = 1/axis_scalings * np.array([voxel_num_x,voxel_num_y]) / 2
 
     source_position = ag.config.system.source.position
-    rotation_axis_position = ag.config.system.rotation_axis.position
+    rotation_axis_position = ag.config.system.rotation_axis.position #+ np.array([20000,0])
+    print(source_position, rotation_axis_position)
     detector_position = ag.config.system.detector.position
     detector_direction_x = ag.config.system.detector.direction_x
 
@@ -361,8 +364,9 @@ def make_projection_plot(
         # print(f'Horizontal {horizontal}: {proj_x_R,proj_y_R}')
         return proj_x_R,proj_y_R
 
-    plt.figure(figsize=[10,10])
-    # plt.figure(figsize=[20,20])
+    if show:
+        plt.figure(figsize=[10,10])
+        # plt.figure(figsize=[20,20])
     # plt.imshow(ig.allocate(0.0).as_array(),cmap='gray')
     plt.imshow(image.as_array(),cmap='gray',vmin=image.min(),vmax=image.max())
     xlims = plt.xlim()
@@ -377,11 +381,15 @@ def make_projection_plot(
     plot_ys = []
     color_abs = 'magenta'
     color_list = list(matplotlib.colors.cnames)
+    color_list = [_ for _ in color_list if _ not in ['cyan',axis_color,bound_color]]
+
+    # color_cycle = itertools.cycle(color_list)
     for horizontal in horizontal_idxs:
         proj_x_R,proj_y_R = horizontal_to_proj(horizontal,scale=scale_abs)
 
         if random_colors:
             color_ray = random.choice(color_list)
+            # color_ray = next(color_cycle)
             color_abs = color_ray
             plt.plot(*zip(R_to_plot(rot_source_R),R_to_plot(proj_x_R)),'-',linewidth=ray_thickness, alpha=ray_opacity,color=color_ray)
             plt.plot(*zip(R_to_plot(proj_x_R),R_to_plot(proj_y_R)),'-',linewidth=ray_thickness,color=color_abs)
@@ -399,13 +407,13 @@ def make_projection_plot(
 
     left_end,_ = horizontal_to_proj(0-0.5,scale=None)
     right_end,_ = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=None)
-    plt.plot(*zip(R_to_plot(left_end),R_to_plot(right_end)),'-',color=axis_color,label=f'Absorption={0*max_abs:.2f}')
+    plt.plot(*zip(R_to_plot(left_end),R_to_plot(right_end)),'--',color=axis_color,label=f'Absorption = {0*max_abs:.2f}')
 
     ### upper bar
     max_pad = 1.1
     _,top_left_end = horizontal_to_proj(0-0.5,scale=scale_abs,proj_abs=1.1*max_abs)
     _,top_right_end = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=scale_abs,proj_abs=1.1*max_abs)
-    plt.plot(*zip(R_to_plot(top_left_end),R_to_plot(top_right_end)),'--',color=axis_color,label=f'Absorption={max_pad*max_abs:.2f}')
+    plt.plot(*zip(R_to_plot(top_left_end),R_to_plot(top_right_end)),'--',color=bound_color,label=f'Absorption = {max_pad*max_abs:.2f}')
     ###
 
     # Calculate new limits
@@ -416,14 +424,19 @@ def make_projection_plot(
 
     new_ylims = ((ylims[0] + ylims[1]) / 2 - (ylims[1] - ylims[0]) / 2 * scale_factor_y, 
                 (ylims[0] + ylims[1]) / 2 + (ylims[1] - ylims[0]) / 2 * scale_factor_y)
-    if not show_source:
+    if lims is not None:
+        plt.xlim(lims[0])
+        plt.ylim(lims[1])
+    elif not show_source:
         plt.xlim(new_xlims)
         plt.ylim(new_ylims)
     
     # plt.xlim(xlims)
     # plt.ylim(ylims)
     plt.legend(loc='upper left')
-    plt.show()
+    plt.gca().set_aspect('equal')
+    if show:
+        plt.show()
 
 
     print(n_3hat)
