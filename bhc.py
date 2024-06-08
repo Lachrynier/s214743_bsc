@@ -308,8 +308,7 @@ def make_projection_plot(
     shift_image_origin = 1/axis_scalings * np.array([voxel_num_x,voxel_num_y]) / 2
 
     source_position = ag.config.system.source.position
-    rotation_axis_position = ag.config.system.rotation_axis.position #+ np.array([20000,0])
-    print(source_position, rotation_axis_position)
+    rotation_axis_position = ag.config.system.rotation_axis.position
     detector_position = ag.config.system.detector.position
     detector_direction_x = ag.config.system.detector.direction_x
 
@@ -324,6 +323,7 @@ def make_projection_plot(
     panel_origin = ag.config.panel.origin
 
     rot_source_R = rot_mat_angle.T @ (source_position + shift_rot_axis_origin)
+    # rot_source_R = rot_mat_angle.T @ (source_position - rotation_axis_position)
     rot_source = rot_source_R - shift_rot_axis_origin
     rot_source_I = rot_source_R + shift_image_origin
 
@@ -368,7 +368,176 @@ def make_projection_plot(
         plt.figure(figsize=[10,10])
         # plt.figure(figsize=[20,20])
     # plt.imshow(ig.allocate(0.0).as_array(),cmap='gray')
-    plt.imshow(image.as_array(),cmap='gray',vmin=image.min(),vmax=image.max())
+    # plt.imshow(image.as_array(),cmap='gray',vmin=image.min(),vmax=image.max())
+    plt.imshow(image.as_array(),origin='lower',cmap='gray',vmin=image.min(),vmax=image.max())
+    xlims = plt.xlim()
+    ylims = plt.ylim()
+
+    # plt.plot(*zip(R_to_plot(rot_panel_center_R - panel_num_pixels[0]//2*n_3hat),R_to_plot(rot_panel_center_R + panel_num_pixels//2*n_3hat)),'k-')#,linewidth=5)
+
+    # max_abs = data.as_array().max()
+    max_abs = np.max(data.as_array()[angle_idx,horizontal_idxs])
+    print(f'Max {max_type} for projection: {np.max(data.as_array()[angle_idx,:])}')
+    plot_xs = []
+    plot_ys = []
+    color_abs = 'magenta'
+    color_list = list(matplotlib.colors.cnames)
+    color_list = [_ for _ in color_list if _ not in ['cyan',axis_color,bound_color]]
+
+    # color_cycle = itertools.cycle(color_list)
+    for horizontal in horizontal_idxs:
+        proj_x_R,proj_y_R = horizontal_to_proj(horizontal,scale=scale_abs)
+
+        if random_colors:
+            color_ray = random.choice(color_list)
+            # color_ray = next(color_cycle)
+            color_abs = color_ray
+            plt.plot(*zip(R_to_plot(rot_source_R),R_to_plot(proj_x_R)),'-',linewidth=ray_thickness, alpha=ray_opacity,color=color_ray)
+            plt.plot(*zip(R_to_plot(proj_x_R),R_to_plot(proj_y_R)),'-',linewidth=ray_thickness,color=color_abs)
+        else:
+            plt.plot(*zip(R_to_plot(rot_source_R),R_to_plot(proj_x_R)),'r-',linewidth=ray_thickness, alpha=ray_opacity)
+            plt.plot(*zip(R_to_plot(proj_x_R),R_to_plot(proj_y_R)),'b-',linewidth=ray_thickness,color=color_abs)
+
+        # print(f'Magenta: {R_to_plot(proj_x_R),R_to_plot(proj_y_R)}')
+        plot_xs.append(R_to_plot(proj_y_R)[0])
+        plot_ys.append(R_to_plot(proj_y_R)[1])
+        # plt.legend(loc='upper left')
+
+    # plt.plot(plot_xs,plot_ys,'-o',color='cyan',markersize=2,label=f'Maximum visible absorption: {max_abs:.3f}')
+    plt.plot(plot_xs,plot_ys,'-o',color='cyan',markersize=2,label=f'Absorption values')
+
+    left_end,_ = horizontal_to_proj(0-0.5,scale=None)
+    right_end,_ = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=None)
+    plt.plot(*zip(R_to_plot(left_end),R_to_plot(right_end)),'--',color=axis_color,label=f'Absorption = {0*max_abs:.2f}')
+
+    ### upper bar
+    max_pad = 1.1
+    _,top_left_end = horizontal_to_proj(0-0.5,scale=scale_abs,proj_abs=1.1*max_abs)
+    _,top_right_end = horizontal_to_proj(panel_num_pixels[0]+0.5,scale=scale_abs,proj_abs=1.1*max_abs)
+    plt.plot(*zip(R_to_plot(top_left_end),R_to_plot(top_right_end)),'--',color=bound_color,label=f'Absorption = {max_pad*max_abs:.2f}')
+    ###
+
+    # Calculate new limits
+    if not scale_factor_x: scale_factor_x = scale_factor
+    if not scale_factor_y: scale_factor_y = scale_factor
+    new_xlims = ((xlims[0] + xlims[1]) / 2 - (xlims[1] - xlims[0]) / 2 * scale_factor_x, 
+                (xlims[0] + xlims[1]) / 2 + (xlims[1] - xlims[0]) / 2 * scale_factor_x)
+
+    new_ylims = ((ylims[0] + ylims[1]) / 2 - (ylims[1] - ylims[0]) / 2 * scale_factor_y, 
+                (ylims[0] + ylims[1]) / 2 + (ylims[1] - ylims[0]) / 2 * scale_factor_y)
+    if lims is not None:
+        plt.xlim(lims[0])
+        plt.ylim(lims[1])
+    elif not show_source:
+        plt.xlim(new_xlims)
+        plt.ylim(new_ylims)
+    
+    # plt.xlim(xlims)
+    # plt.ylim(ylims)
+    plt.legend(loc='upper left')
+    plt.gca().set_aspect('equal')
+    if show:
+        plt.show()
+
+
+    print(n_3hat)
+    return
+    # return axis_scalings * rot_source_I, axis_scalings * rot_panel_pixel_I
+
+def make_projection_plot2(
+        data,image,angle_idx,horizontal_idxs,
+        show_source=False,scale_proj_axis=1.2,scale_factor=1.8,
+        ray_opacity=0.5,ray_thickness=1.5,scale_abs=0.3,
+        random_colors=True,max_type='absorption',axis_color='black',
+        bound_color='red', scale_factor_x=None,scale_factor_y=None,lims=None,
+        show=True
+    ):
+    # currently assumes orthogonality of center ray with detector panel. that is detector_direction_x = [1,0]
+    def R_to_plot(vec):
+        return axis_scalings*(vec + shift_R_to_I)
+    
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    angle = ag.angles[angle_idx]
+
+    ### initializations
+    voxel_num_x, voxel_num_y, voxel_num_z = ig.voxel_num_x, ig.voxel_num_y, ig.voxel_num_z
+    voxel_size_x, voxel_size_y, voxel_size_z = ig.voxel_size_x, ig.voxel_size_y, ig.voxel_size_z
+    center_x, center_y, center_z = ig.center_x, ig.center_y, ig.center_z
+    image_max_side = np.max([voxel_num_x*voxel_size_x, voxel_num_y*voxel_size_y])
+
+    axis_scalings = 1/np.array([voxel_size_x,voxel_size_y])
+    shift_image_origin = 1/axis_scalings * np.array([voxel_num_x,voxel_num_y]) / 2
+
+    source_position = ag.config.system.source.position
+    rotation_axis_position = ag.config.system.rotation_axis.position #+ np.array([20000,0])
+    print(source_position, rotation_axis_position)
+    detector_position = ag.config.system.detector.position
+    detector_direction_x = ag.config.system.detector.direction_x
+
+    # shift_rot_axis_origin = -rotation_axis_position
+    shift_rot_axis_origin = rotation_axis_position
+    angle *= np.pi/180
+    rot_mat_angle = np.array([[np.cos(angle), -np.sin(angle)],[np.sin(angle), np.cos(angle)]])
+
+    # shift_R_to_I = -shift_rot_axis_origin + shift_image_origin
+    shift_R_to_I = rotation_axis_position + shift_image_origin
+
+    panel_num_pixels = ag.config.panel.num_pixels
+    panel_pixel_size = ag.config.panel.pixel_size
+    panel_origin = ag.config.panel.origin
+
+    # rot_source_R = rot_mat_angle.T @ (source_position + shift_rot_axis_origin)
+    rot_source_R = rot_mat_angle @ (source_position - rotation_axis_position)
+    rot_source = rot_source_R - shift_rot_axis_origin
+    rot_source_I = rot_source_R + shift_image_origin
+
+    ### line towards detector position
+    # rot_panel_center_R = rot_mat_angle.T @ (detector_position + shift_rot_axis_origin)
+    rot_panel_center_R = rot_mat_angle @ (detector_position - rotation_axis_position)
+    rot_panel_center = rot_panel_center_R - shift_rot_axis_origin
+    rot_panel_center_I = rot_panel_center_R + shift_image_origin
+
+    # theta,rho = calc_line_params_from_two_points(rot_source_R,rot_panel_pixel_R)
+    # rot_mat_theta = np.array([[np.cos(theta), -np.sin(theta)],[np.sin(theta), np.cos(theta)]])
+    n = (rot_panel_center_R - rot_source_R) / np.linalg.norm(rot_panel_center_R - rot_source_R,2)
+    n_3hat = -np.array([n[1],-n[0]])
+    # scale_n = np.linalg.norm(source_position, 2) + scale_proj_axis * image_max_side/2
+    scale_n = np.linalg.norm(source_position+rotation_axis_position[1], 2) + scale_proj_axis * image_max_side/2
+    L = np.linalg.norm(detector_position-source_position,2)
+    
+    ###
+    def horizontal_to_proj(horizontal,scale,proj_abs=None):
+        panel_pixel_position = detector_position + detector_direction_x * panel_pixel_size * ( -(panel_num_pixels[0]-1)/2 + horizontal )
+        # rot_panel_pixel_R = rot_mat_angle.T @ (panel_pixel_position + shift_rot_axis_origin)
+        rot_panel_pixel_R = rot_mat_angle.T @ (panel_pixel_position - rotation_axis_position)
+        rot_panel_pixel = rot_panel_pixel_R - shift_rot_axis_origin
+        rot_panel_pixel_I = rot_panel_pixel_R + shift_image_origin
+
+        H = np.linalg.norm(panel_pixel_position - detector_position, 2)
+        scale_n_3hat = H/L * scale_n
+        if horizontal < (panel_num_pixels[0] // 2):
+            scale_n_3hat *= (-1)
+    
+        # proj_x is "x-axis" of fan-beam projection plot
+        proj_x_R = rot_source_R + scale_n*n + scale_n_3hat*n_3hat
+        if scale == None:
+            proj_y_R = None
+        else:
+            if not proj_abs:
+                proj_abs = data.as_array()[angle_idx,horizontal]
+            # proj_y_R = proj_x_R + 0.1*image_max_side * n
+            proj_y_R = proj_x_R + scale*image_max_side * proj_abs/max_abs * n
+
+        # print(f'Horizontal {horizontal}: {proj_x_R,proj_y_R}')
+        return proj_x_R,proj_y_R
+
+    if show:
+        plt.figure(figsize=[10,10])
+        # plt.figure(figsize=[20,20])
+    # plt.imshow(ig.allocate(0.0).as_array(),cmap='gray')
+    # plt.imshow(image.as_array(),cmap='gray',vmin=image.min(),vmax=image.max())
+    plt.imshow(image.as_array(),origin='lower',cmap='gray',vmin=image.min(),vmax=image.max())
     xlims = plt.xlim()
     ylims = plt.ylim()
 

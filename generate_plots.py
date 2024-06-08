@@ -52,7 +52,7 @@ from skimage.filters import threshold_otsu
 from bhc_v2 import load_centre, BHC
 from matplotlib.colors import Normalize,LogNorm
 from sim_main import lin_interp_sino2D
-from bhc import make_projection_plot
+from bhc import make_projection_plot, make_projection_plot2
 
 
 def spectrum_penetration_plot():
@@ -1493,11 +1493,17 @@ def X16_embeddings():
     show1D(data,slice_list=[('angle', 300)])
 
 def X20_embeddings():
+    def normalize_angle(idx):
+        angle = np.mod(ag.angles[idx], 360)
+        if angle > 180:
+            angle -= 360
+        return angle
+
     data = load_centre('X20_cor.pkl')
     ag = data.geometry
     ig = ag.get_ImageGeometry()
 
-    recon = FDK(data).run()
+    recon = FDK(data).run(verbose=0)
     detector_num_pixels = data.get_dimension_size('horizontal')
 
     chosen_angle = 0
@@ -1512,14 +1518,28 @@ def X20_embeddings():
         scale_proj_axis=0.3,ray_opacity=0.3,ray_thickness=1,scale_factor=0.9)
     
     ###
+    chosen_angle = 30
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.2,
+        scale_proj_axis=0.3,ray_opacity=0.3,ray_thickness=1,scale_factor=1.1)
+    
+    ###
     chosen_angle = 180
     idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
     print(np.mod(ag.angles[idx_chosen_angle], 360))
     horizontal_idxs = np.arange(0,700)
     make_projection_plot(
         data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
-        scale_proj_axis=0.08,ray_opacity=0.2,ray_thickness=1,lims=[(100,500),(350,650)])
-    
+        scale_proj_axis=0.08,ray_opacity=0.2,ray_thickness=1,
+        lims=[(300,600),(350,550)],show=False)
+    plt.title(rf'Projection at angle ${normalize_angle(idx_chosen_angle):.2f}^\circ$')
+    plt.tight_layout()
+    fig = plt.gcf()
+    fig.set_size_inches(10, 7)
+    plt.savefig(os.path.join(base_dir, 'plots/X20_embed_no_holes.pdf'))
+    plt.show()
     ###
     idx_chosen_angle = 500
     horizontal_idxs = np.arange(590,750)
@@ -1528,12 +1548,54 @@ def X20_embeddings():
         scale_proj_axis=-0.3,ray_opacity=0.2,ray_thickness=1,lims=[(0,400),(400,650)])
     
     ###
-    chosen_angle = 120
+    chosen_angle = 120+10
     idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
     print(np.mod(ag.angles[idx_chosen_angle], 360))
     horizontal_idxs = np.arange(0,1000,3)
     make_projection_plot(
         data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
-        scale_proj_axis=0.9,ray_opacity=0.2,ray_thickness=1,lims=[(100,1100),(0,800)])
+        scale_proj_axis=0.73,ray_opacity=0.2,ray_thickness=1,lims=[(100,1200),(-200,700)])
+    
+    ###
+    chosen_angle = 95
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    print(np.mod(ag.angles[idx_chosen_angle], 360))
+    horizontal_idxs = np.arange(0,1000,3)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.08,
+        scale_proj_axis=0.83,ray_opacity=0.2,ray_thickness=1,
+        show=False,lims=[(100,1100),(350,750)])
+    plt.title(rf'Projection at angle ${normalize_angle(idx_chosen_angle):.2f}^\circ$')
+    plt.tight_layout()
+    fig = plt.gcf()
+    fig.set_size_inches(10, 4)
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_embed_thick.pdf'))
+    plt.show()
 
-X20_embeddings()
+def X12_X22_embeddings():
+    def normalize_angle(idx):
+        angle = np.mod(ag.angles[idx], 360)
+        if angle > 180:
+            angle -= 360
+        return angle
+
+    data = load_centre('X12-X22_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    recon = FDK(data).run(verbose=0)
+    detector_num_pixels = data.get_dimension_size('horizontal')
+    
+    chosen_angle = [-20,45][1]
+    idx_chosen_angle = np.argmin(np.mod(ag.angles - chosen_angle, 360))
+    horizontal_idxs = np.arange(0,1000,3)
+    make_projection_plot(
+        data,recon,idx_chosen_angle,horizontal_idxs,scale_abs=0.23,
+        scale_proj_axis=0.65,ray_opacity=0.3,ray_thickness=1,scale_factor=0.9,
+        show=False,lims=[(100,1100),(400,1200)])
+    plt.title(rf'Projection at angle ${normalize_angle(idx_chosen_angle):.2f}^\circ$')
+    plt.tight_layout()
+    fig = plt.gcf()
+    fig.set_size_inches(10, 8)
+    plt.savefig(os.path.join(base_dir, 'plots/X12-X22_embed_scatter.pdf'))
+    plt.show()
