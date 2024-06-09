@@ -283,7 +283,7 @@ class BHC:
         data_x_poly = self.f_poly(self.data.as_array(), *self.popt_poly)
         data_y_mono = self.f_mono(data_x_poly, *self.popt_mono)
         self.data_bhc = AcquisitionData(array=np.array(data_y_mono, dtype='float32'), geometry=self.data.geometry)
-        self.recon_bhc = FDK(self.data_bhc).run()
+        self.recon_bhc = FDK(self.data_bhc).run(verbose=0)
 
     def run(self, verbose=1):
         x, y = self.prepare_data()

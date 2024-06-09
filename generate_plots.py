@@ -26,6 +26,7 @@ from skimage.morphology import erosion, dilation, opening, closing
 from skimage.morphology import disk 
 
 ### CIL imports
+import cil
 from cil.optimisation.algorithms import GD, FISTA, PDHG
 from cil.optimisation.operators import BlockOperator, GradientOperator,\
                                        GradientOperator
@@ -41,6 +42,7 @@ from cil.recon import FDK, FBP
 from cil.plugins.tigre import ProjectionOperator#, FBP
 from cil.processors import TransmissionAbsorptionConverter, Slicer, AbsorptionTransmissionConverter
 from cil.optimisation.algorithms import CGLS, SIRT
+from cil.plugins.ccpi_regularisation.functions import FGP_TV
 
 from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry
 from cil.utilities.noise import gaussian, poisson
@@ -1120,13 +1122,103 @@ def compare_BHC_fits():
     plt.imshow(recon3.as_array()[hori_x_slice], origin='lower', cmap='gray')
     # plt.xlabel('horizontal_x')
     # plt.ylabel('horizontal_y')
-    plt.title(r'FDK reconstruction from $f_p=cx^5$')
+    plt.title(rf'FDK reconstruction from $f_p=10^{{(x+\log_{{10}}({shift}))/c}} - {shift}$')
     plt.colorbar()
 
     plt.tight_layout()
     # plt.savefig(os.path.join(base_dir, 'plots/X20_poly_recons.pdf'))
     plt.show()
 
+def bhc_iter():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+
+    y_slice = slice(300,750)
+    # y_slice = slice(700,1300)
+
+    def f_poly1(x, *a):
+        return a[0]*x**3
+    def f_poly2(x, *a):
+        return a[0]*x**5
+    
+    shift = 0.05
+    const = np.log10(shift)
+    def f_poly3(x, *a):
+        # return a[0]*np.log10(x+0.1) + 1
+        # return 10**((x-1)/a[0])-0.1
+        return 10**((x+const)/a[0]) - shift
+
+    ###
+    f_polys = [f_poly1,f_poly2]
+    fig_seg,ax_seg = plt.subplots(2,1,figsize=(9,8))
+    fig_fit,ax_fit = plt.subplots(1,2,figsize=(11,5))
+    labels = [r'$f_p=cx^3$', r'$f_p=cx^5$']
+
+    plt.figure()
+    for j,f_poly in enumerate(f_polys):
+        data_bhc = data
+        bhcs = []
+        recon_bhcs = []
+        segmentations = []
+        recon = FDK(data).run(verbose=0)
+        popt_polys = []
+
+        N = 3
+        for i in range(N):
+            print(f'Iteration {i}')
+            segmentation = clip_otsu_segment(recon.as_array(), ig, clip=0)
+            path_lengths = A.direct(segmentation)
+            # mask = (path_lengths.as_array() > 0.05) & (data_bhc.as_array() > 0.25)
+            mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+            bhc = BHC(path_lengths, data, None, f_poly, num_bins=100, mask=mask, n_poly=1)
+            if i < (N-1):
+                data_bhc,recon = bhc.run(verbose=1)
+            else:
+                plt.figure(fig_fit)
+                plt.sca(ax_fit.flatten()[j])
+                bhc.get_hist_fit_plot()
+                bhc.plot_fits(show_hist=False, make_trans_plot=False, linewidth=3, color='red')
+                plt.title(rf'Converged fit for {labels[j]}')
+                bhc.perform_correction()
+                plt.figure()
+                data_bhc,recon_bhc = bhc.data_bhc,bhc.recon_bhc
+            # print(f'popt_poly: {bhc.popt_poly}')
+            # show2D(recon.as_array()[y_slice])
+            show2D(segmentation.as_array()[y_slice])
+
+            popt_polys.append(bhc.popt_poly)
+            bhcs.append(bhc)
+            recon_bhcs.append(recon)
+
+            if i < (N-1):
+                segmentations.append(segmentation)
+            else:
+                plt.figure(fig_seg)
+                plt.sca(ax_seg.flatten()[j])
+                plt.imshow(segmentation.as_array()[y_slice], origin='lower', cmap='gray')
+                plt.title(rf'Segmentation for BHC with {labels[j]}')
+                plt.figure()
+
+        segmentation = clip_otsu_segment(recon.as_array(), ig, clip=0)
+        print(f'popt_polys: {popt_polys}')
+
+        plt.figure(fig_fit)
+        plt.tight_layout()
+        # plt.savefig(os.path.join(base_dir,'plots/X20_bhc_conv_fits.pdf'))
+        plt.show()
+
+        plt.figure(fig_seg)
+        plt.tight_layout()
+        # plt.savefig(os.path.join(base_dir,'plots/X20_bhc_conv_segm.pdf'))
+        plt.show()
 
 def photon_shapes():
     # data = load_centre('X20_cor.pkl')
@@ -1599,3 +1691,221 @@ def X12_X22_embeddings():
     fig.set_size_inches(10, 8)
     plt.savefig(os.path.join(base_dir, 'plots/X12-X22_embed_scatter.pdf'))
     plt.show()
+
+def X20_reg():
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+
+    data_pad = cil.processors.Padder(pad_width=300)(data)
+    ag_pad = data_pad.geometry
+    ig_pad = ag_pad.get_ImageGeometry()
+    A_pad = ProjectionOperator(ig_pad, ag_pad, direct_method='Siddon', device='gpu')
+
+    recon = FDK(data).run(verbose=0)
+    recon_pad = FDK(data_pad).run(verbose=0)
+    # show2D(recon)
+    # show2D(recon_pad)
+
+    hori_y_slice = slice(300,750)
+    #####
+    update_interval = 1
+    F = LeastSquares(A, data)
+    G = IndicatorBox(lower=0.0)
+    x0 = ig.allocate(0.0)
+    fista_NN = FISTA(f=F, g=G, initial=x0,
+                     max_iteration=1000,
+                     update_objective_interval=update_interval)
+    fista_NN.run(50, verbose=2)
+    # show2D(fista_NN.solution.as_array()[hori_y_slice])
+
+
+    #####
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    alphas = [1,10,100]
+    objectives = []
+    solutions = []
+    for i,alpha in enumerate(alphas):
+        F = LeastSquares(A, data)
+        # F = LeastSquares(A_pad, data_pad)
+        G = FGP_TV(alpha=alpha, nonnegativity=True, device='gpu')
+        # G = TotalVariation()
+        # x0 = ig.allocate(0.0)
+        x0 = recon
+        # x0 = recon_pad
+        update_interval = 1
+        fista_TV = FISTA(initial=x0, f=F, g=G,
+                        max_iteration=1000, update_objective_interval=update_interval)
+        fista_TV.run(50, verbose=2)
+        # show2D(fista_TV.solution.as_array()[hori_y_slice], title=f'alpha = {alpha}')
+        solutions.append(fista_TV.solution.as_array()[hori_y_slice])
+        objectives.append(fista_TV.objective)
+
+    alphas.insert(0,0)
+    solutions.insert(0,fista_NN.solution.as_array()[hori_y_slice])
+    objectives.insert(0,fista_NN.objective)
+
+    N = len(alphas)
+    fig,ax = plt.subplots(N,1,figsize=(9,16))
+    for i in range(N):
+        plt.sca(ax.flatten()[i])
+        plt.imshow(solutions[i], origin='lower', cmap='gray')
+        plt.title(rf'NN+TV with $\alpha = {alphas[i]}$')
+        plt.colorbar()
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_TV_recons.pdf'))
+    plt.show()
+
+    fig, ax = plt.subplots(figsize=(8,4))
+    plt.sca(ax)
+    for i in range(N):
+        # plt.plot(objectives[i], label=rf'$\alpha = {alphas[i]}$')
+        plt.plot(range(1,len(objectives[i])),objectives[i][1:], label=rf'$\alpha = {alphas[i]}$')
+    plt.yscale('log')
+    plt.legend()
+    plt.grid(True)
+    plt.title('Convergence plot of the objective function for NN+TV')
+    plt.xlabel('Iteration')
+    plt.ylabel('Objective value')
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_TV_conv.pdf'))
+    plt.show()
+
+def backprojection_mask():
+    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    tau = 0.3
+    air_proj_mask = 1000*np.array(data.as_array() < tau, dtype=np.float32)
+    # air_proj_mask = 1e6*np.array(data.as_array() < tau, dtype=np.float32)
+    air_proj_mask = AcquisitionData(array=air_proj_mask, geometry=ag)
+
+    fft_order = 11
+    recon_air = FDK(air_proj_mask, filter=np.ones(2**fft_order,dtype=np.float32)).run(verbose=0)
+    epsilon = 0.1
+    recon_mask = recon_air < epsilon
+    show2D(recon_air, fix_range=(0,10), cmap='nipy_spectral')
+    show2D(recon_mask)
+
+    fig,ax = plt.subplots(figsize=(9,4))
+    plt.imshow(recon_mask[slice(300,750)], origin='lower', cmap='gray')
+    plt.colorbar()
+    plt.title('Mask from air ray back-projection')
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir,'plots/X20_air_mask.pdf'))
+    plt.show()
+
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    F = LeastSquares(A, data)
+    x0 = ig.allocate(0.0)
+    # x0 = FDK(data).run(verbose=0)
+    # show2D(x0)
+
+    lb = np.zeros(recon_mask.shape)
+    lb[recon_mask] = -np.inf
+    ub = np.zeros(recon_mask.shape)
+    ub[recon_mask] = np.inf
+
+    G = IndicatorBox(lower=lb, upper=ub)
+    fista_air = FISTA(f=F, g=G, initial=x0, 
+                      max_iteration=1000,
+                      update_objective_interval=10)
+    fista_air.run(50, verbose=1)
+    show2D(fista_air.solution,'Masking')
+    show2D(fista_air.solution,fix_range=(0,1.25))
+
+    G = IndicatorBox(lower=0, upper=ub)
+    fista_air_NN = FISTA(f=F, g=G, initial=x0, 
+                         max_iteration=1000,
+                         update_objective_interval=10)
+    fista_air_NN.run(100, verbose=1)
+    # goes back up at around 150
+    
+    fig,ax = plt.subplots(figsize=(9,4))
+    plt.imshow(fista_air_NN.solution.as_array()[slice(300,750)], origin='lower', cmap='gray', vmax=0.8)
+    plt.colorbar()
+    plt.title('Masking with NN')
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir,'plots/X20_air_mask_recon.pdf'))
+    plt.show()
+
+    show2D(fista_air_NN.solution,'Masking with NN',size=(4,10))
+    show2D(fista_air_NN.solution,fix_range=(0,1.25))
+
+def X20_cor():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    file_path = os.path.join(base_dir,'centres/X20.pkl')
+    with open(file_path, 'rb') as file:
+        data_no_cor = pickle.load(file)
+
+    file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
+    with open(file_path, 'rb') as file:
+        data_cor = pickle.load(file)
+    
+    data_no_cor = TransmissionAbsorptionConverter()(data_no_cor)
+    ag_no_cor = data_no_cor.geometry
+    ig_no_cor = ag_no_cor.get_ImageGeometry()
+
+    ag_cor = data_cor.geometry
+    ig_cor = ag_cor.get_ImageGeometry()
+
+    recon_no_cor = FDK(data_no_cor, ig_no_cor).run(verbose=0)
+    recon_cor = FDK(data_cor, ig_cor).run(verbose=0)
+
+    y_slice = slice(300,750)
+    fig,ax = plt.subplots(2,1,figsize=(9,8))
+    plt.sca(ax[0])
+    plt.imshow(recon_no_cor.as_array()[y_slice], origin='lower', cmap='gray')
+    plt.title('Without COR correction')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    plt.imshow(recon_cor.as_array()[y_slice], origin='lower', cmap='gray')
+    plt.title('With COR correction')
+    plt.colorbar()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'plots/X20_cor_vs_no_cor.pdf'))
+    plt.show()
+
+    show2D(data_cor, size=(9,13)).save(os.path.join(base_dir, 'plots/X20_sino.pdf'))
+    # fig = show2D(data_cor, size=(9,13)).figure
+    # plt.figure(fig)
+    # plt.title('Sinogram of X20 center slice')
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_sino.pdf'))
+    # plt.show()
+    
+
+def X20_imitation():
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+
+    im = io.imread(os.path.join(base_dir,'test_images/X20_imi.png'))[::-1,:,0] > 0
+    image = ImageData(array=im.astype('float32'), geometry=ig)
+    
+    y_slice = slice(300,750)
+    fig,ax = plt.subplots(figsize=(9,4))
+    plt.imshow(image.as_array()[y_slice],origin='lower',cmap='gray')
+    plt.title('X20 imitation')
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_imitation.pdf'))
+    plt.show()
+
+    mu = fun_attenuation(plot=False)
+    bin_centers, bin_heights = generate_spectrum(plot=False,filter=0.00)
+    num_bins = bin_centers.size
