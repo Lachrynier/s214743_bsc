@@ -232,7 +232,7 @@ class BHC:
     def plot_histogram(self, x, y):
         norms = {'lin': Normalize(), 'log': LogNorm()}
         counts, x_edges, y_edges, _ = plt.hist2d(x, y, bins=self.num_bins, range=[[0, x.max()], [0, y.max()]], norm=norms[self.color_norm])
-        plt.xlabel('Path length')
+        plt.xlabel('Path length [mm]')
         plt.ylabel('Absorption')
         plt.colorbar()
         return counts, x_edges, y_edges

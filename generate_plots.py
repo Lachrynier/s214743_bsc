@@ -44,7 +44,7 @@ from cil.processors import TransmissionAbsorptionConverter, Slicer, AbsorptionTr
 from cil.optimisation.algorithms import CGLS, SIRT
 from cil.plugins.ccpi_regularisation.functions import FGP_TV
 
-from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry
+from cil.framework import ImageData, ImageGeometry, AcquisitionData, AcquisitionGeometry, VectorData, VectorGeometry
 from cil.utilities.noise import gaussian, poisson
 
 base_dir = os.path.abspath('/dtu/3d-imaging-center/projects/2022_DANFIX_Vindelev/analysis/s214743_bsc/')
@@ -55,6 +55,10 @@ from bhc_v2 import load_centre, BHC
 from matplotlib.colors import Normalize,LogNorm
 from sim_main import lin_interp_sino2D
 from bhc import make_projection_plot, make_projection_plot2
+
+from esc import compute_scatter_basis, ESCMatrixOperator
+from cil.optimisation.operators import CompositionOperator, FiniteDifferenceOperator, MatrixOperator, LinearOperator
+from cil.framework import DataContainer, BlockDataContainer
 
 
 def spectrum_penetration_plot():
@@ -1890,6 +1894,11 @@ def X20_cor():
     
 
 def X20_imitation():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
     data = load_centre('X20_cor.pkl')
     ag = data.geometry
     ig = ag.get_ImageGeometry()
@@ -1909,3 +1918,886 @@ def X20_imitation():
     mu = fun_attenuation(plot=False)
     bin_centers, bin_heights = generate_spectrum(plot=False,filter=0.00)
     num_bins = bin_centers.size
+
+    d = A.direct(image)
+    d = d.as_array()
+
+    I = np.zeros(d.shape, dtype='float64')
+    I_const = 0.08
+    I0 = 0
+    for i in range(num_bins):
+        E = bin_centers[i]
+        I0_E = bin_heights[i]
+        I0 += I0_E
+        I += I0_E * np.exp(-mu(E)*d)
+        # I += I0_E * np.exp(-mu(E)*d) + I_const/num_bins
+        # I += I0_E * np.exp(-mu(E)*d) + 5*1e-4
+
+    I_P = I
+    b_bh = AcquisitionData(array=np.array(-np.log(I_P/I0),dtype='float32'), geometry=ag)
+    I = np.array(I_P + I_const,dtype='float32')
+    
+    b_bh_scatter = AcquisitionData(array=-np.log(I/I0), geometry=ag)
+    # b = data.as_array()
+
+    ##
+    mu_eff = np.sum(bin_heights * mu(bin_centers))
+    print(f'mu_eff: {mu_eff}')
+    # b_mono = -np.log(np.exp(-mu_eff*d))
+    b_mono = d*mu_eff
+    # b_mono = AcquisitionData(array=np.exp(-b_mono), geometry=ag)
+    b_mono = AcquisitionData(array=b_mono, geometry=ag)
+
+### Reconstructions
+    ## noise
+    # cap = None
+    # # cap = b.max()
+    # b_noisy = skimage.util.random_noise(b.as_array(), mode='gaussian',clip=False, mean=0, var=1/(1e4*I))
+    # b_noisy = np.clip(a=b_noisy, a_min=0, a_max=cap)
+    # b_noisy = AcquisitionData(array=np.array(b_noisy,dtype='float32'), geometry=ag)
+
+    # plt.scatter(A.direct(image).as_array().flatten(), b_noisy.as_array().flatten(), alpha=0.2, color='black', label='Observed',s=3)
+    # plt.title('b_noisy vs true path lengths')
+    # plt.xlabel('mm')
+    
+    # recon_noisy = FDK(b_noisy, image_geometry=ig).run(verbose=0)
+    # show2D(recon_noisy, title='recon')
+
+    # plt.plot(d.flatten(), b.as_array().flatten(), '.', alpha=0.5, color='black')
+    # plt.grid(True)
+
+    plt.rcParams.update({'font.size': 14})
+    fig,ax = plt.subplots(2,1,figsize=(9,7))
+    bins = [100,40]
+    plt.sca(ax[0])
+    x = d.flatten()
+    y = b_bh.as_array().flatten()
+    plt.hist2d(x, y, bins=bins, range=[[0, x.max()], [0, y.max()]], norm=LogNorm())
+    plt.colorbar()
+    plt.xlabel(r'Path length [mm]')
+    plt.ylabel(r'Absorption')
+    plt.title('2D histogram of polychromatic data with no scatter')
+
+    plt.sca(ax[1])
+    x = d.flatten()
+    y = b_bh_scatter.as_array().flatten()
+    plt.hist2d(x, y, bins=bins, range=[[0, x.max()], [0, y.max()]], norm=LogNorm())
+    plt.colorbar()
+    plt.xlabel(r'Path length [mm]')
+    plt.ylabel(r'Absorption')
+    plt.title('2D histogram of polychromatic data with constant scatter')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'plots/X20_imi_2Dhist.pdf'))
+    plt.show()
+
+    recon_bh = FDK(b_bh, image_geometry=ig).run(verbose=0)
+    recon_bh_scatter = FDK(b_bh_scatter, image_geometry=ig).run(verbose=0)
+    # show2D(recon, title='recon')
+
+    y_slice = slice(350,700)
+    fig,ax = plt.subplots(2,1,figsize=(9,8))
+    imshow_kwargs = {
+        'origin': 'lower',
+        'cmap': 'gray',
+        'vmin': -1,
+        'vmax': 2
+    }
+
+    plt.sca(ax[0])
+    plt.imshow(recon_bh.as_array()[y_slice], **imshow_kwargs)
+    plt.colorbar()
+    plt.title('FDK of imitation with BH and no scatter')
+
+    plt.sca(ax[1])
+    plt.imshow(recon_bh_scatter.as_array()[y_slice], **imshow_kwargs)
+    plt.colorbar()
+    plt.title('FDK of imitation with BH and constant scatter')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_imi_recon.pdf'))
+    plt.show()
+
+def esc_shapes():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    
+    data = load_centre('X20.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_geom.png')
+    im_arr = io.imread(filepath)
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    mu = 10 / (ig.voxel_num_x*ig.voxel_size_x) # scale to 1 mm
+    # mu = 40 / (ig.voxel_num_x*ig.voxel_size_x)
+    data = mu*A.direct(im)
+    data.reorder('tigre')
+    recon_P = FDK(data, image_geometry=ig).run(verbose=0)
+    show2D(recon_P)
+
+    ### Scatter simulation
+    I_P = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    # factor = [5,20,40,100,200][2]
+    # basis_params = [[0.15*1/factor,0,factor]]
+
+    # factors = [40,100]
+    factors = [60]
+    basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+    # I_S = 0.05*I_S*3
+    # I_S = 0.05*I_S*3
+    I = I_P + I_S_sum
+
+    basis_idx = 0
+    idx = 0
+
+    ########################
+    fig,ax = plt.subplots(figsize=(8,5))
+    plt.sca(ax)
+    plt.plot(I_P[idx,:],label=r'$I_P$')
+    # plt.plot(I_S[basis_idx,idx,:],label=r'$I_S$')
+    plt.plot(I_S_sum[idx,:],label=r'$I_S$')
+    # plt.plot(I[idx,:],label=r'I=I_P+I_S')
+    plt.grid(True)
+    plt.legend()
+    plt.title('Projection with simulated scatter')
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_scatter_proj.png'))
+    plt.show()
+    #####################
+
+    data_scatter = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I, dtype=np.float32), geometry=ag))
+    recon = FDK(data_scatter, image_geometry=ig).run(verbose=0)
+
+    ####################
+    fig,ax = plt.subplots(2, 1, gridspec_kw={'height_ratios': [4, 1]}, figsize=(8,10))
+    plt.sca(ax[0])
+    im0 = plt.imshow(recon.as_array(), origin='lower', cmap='gray')#,vmin=-10, vmax=10)
+    # plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title(r'Reconstruction of $-\ln(I_P+I_S)$')
+    plt.colorbar()
+    # plt.colorbar(im0,fraction=0.046, pad=0.04)
+
+    plt.sca(ax[1])
+    hori_x,hori_y = 700,650
+
+    plt.plot(recon.as_array()[:,hori_x]) # horizontal_x fixed
+    plt.title(f'Intensity profile for horizontal_x={hori_x} on the reconstruction')
+    plt.xlabel('horizontal_y')
+
+    # plt.plot(recon.as_array()[hori_y,:]) # horizontal_y fixed
+    # plt.title(f'Intensity profile for horizontal_y={hori_y} on the reconstruction')
+    # plt.xlabel('horizontal_x')
+    
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_scatter_recon.pdf'))
+    plt.show()
+    ####################
+    
+    P = recon.as_array()
+    b = data_scatter.as_array()
+    ny,nx = ig.shape
+
+    ### ESC step
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+
+    # factor = [5,20,40,100,200][2]
+    # basis_params = [[0.15*1/factor,0,factor]]
+    # basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    # factors = [40,100]
+    factors = [60]
+    basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    trans = I
+    nc = len(basis_params)
+
+    basis_idx = 0
+    if False:
+        ### approximation (real world data)
+        I_S = compute_scatter_basis(b,basis_params)
+        I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+        # I_S = 0.05*I_S
+        # I_Q = trans-I_S
+        I_Q = I - I_S_sum
+        s = b[None,:,:] + np.log(I_Q)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.grid(True)
+        plt.show()
+        ###
+    else:
+        ### what the model is based on
+        I_S = compute_scatter_basis(-np.log(I_P),basis_params)
+        I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+        # I_S = 0.05*I_S
+        # I_Q = trans-I_S
+        I_Q = I - I_S_sum
+        s = -np.log(I_S+I_P) + np.log(I_P)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.grid(True)
+        plt.show()
+        ###
+
+    # print(np.unravel_index(s.argmax(),s.shape), np.max(s))
+
+    # fig,ax = plt.subplots(1,2,figsize=(10,5))
+    # plt.title(f'basis_idx: {basis_idx}')
+    # plt.sca(ax[0])
+    # plt.plot(s[basis_idx,idx,:],label='s')
+    # plt.legend()
+
+    # plt.sca(ax[1])
+    # plt.plot(-np.log(-s[basis_idx,idx,:]),label='-ln(-s)')
+    # plt.legend()
+    # plt.show()
+
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        # show2D(-S[i])
+        show2D(S[i],title=f'S_{i}')
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = S.reshape(nc, nx*ny).T
+
+    vg = VectorGeometry(length=nc+1)
+    op1 = ESCMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
+    op2 = GradientOperator(domain_geometry=ig)
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    # F = MixedL11Norm()
+    # F = SmoothMixedL21Norm(epsilon=1e-2)
+
+    cext = VectorData(array=np.hstack((1,np.full(nc, 0.1, dtype=np.float32))), geometry=vg)
+
+    l = -np.inf*np.ones(1+nc)
+    l[0] = 1
+    u = np.inf*np.ones(1+nc)
+    u[0] = 1
+    G = IndicatorBox(lower=l,upper=u)
+    upd_int = 3
+    pdhg = PDHG(f=F, g=G, operator=K, initial=cext, max_iteration=1000, update_objective_interval=3)
+    # pdhg.run(iterations=150)
+    pdhg.run(iterations=34)
+
+    print(pdhg.solution.as_array())
+    Q = op1.direct(pdhg.solution)
+    show2D(Q, title=f"c_ext={pdhg.solution.as_array()}")
+    show1D(Q, [('horizontal_x',hori_x)], title=f'horizontal_x={hori_x}', size=(8,3))
+    # show1D(Q, [('horizontal_y',hori_y)], title=f'horizontal_y={hori_y}', size=(8,3))
+
+    F(op2.direct(op1.direct(pdhg.solution)))
+    F(op2.direct(op1.direct(VectorData(np.array([1,0])))))
+    F(op2.direct(op1.direct(VectorData(np.array([1,-4.47])))))
+
+    c = np.array([1,-4.47])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+
+    c = np.array([1,-1])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+    show1D(op1.direct(VectorData(c)), [('horizontal_x',hori_x)], title=f'horizontal_x={hori_x}', size=(8,3))
+
+    def total_variation1(image):
+        diff1 = np.diff(image, axis=0)
+        diff2 = np.diff(image, axis=1)
+        tv = np.sum(np.abs(diff1)) + np.sum(np.abs(diff2))
+        return tv
+    
+    def total_variation2(image):
+        dx = np.diff(image, axis=0)
+        dy = np.diff(image, axis=1)
+        dx = np.pad(dx, ((0, 1), (0, 0)), 'constant')
+        dy = np.pad(dy, ((0, 0), (0, 1)), 'constant')
+        tv = np.sum(np.sqrt(dx**2 + dy**2))
+        return tv
+
+    ##########
+    plt.rcParams.update({'font.size': 16})
+    vs = np.arange(-2.0,4.0,0.1)
+    # vs = np.arange(-100,100,0.5)
+    fs = np.zeros(vs.shape)
+    for i,v in enumerate(vs):
+        fs[i] = F(op2.direct(op1.direct(VectorData(np.array([1,v])))))
+    
+    fig,ax = plt.subplots(figsize=(8,5)); plt.sca(ax)
+    plt.plot(vs,fs, color='black')
+    plt.xlabel(r'$c_1$')
+    plt.ylabel(r'Objective value')
+    plt.plot(pdhg.solution.as_array()[1], pdhg.objective[-1], label='Minimizer',
+        marker=".", markersize=15, color='red', linestyle='None')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_obj_curve.pdf'))
+    plt.show()
+    plt.rcParams.update({'font.size': 12})
+
+    ##########
+    plt.rcParams.update({'font.size': 16})
+    import matplotlib as mpl
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{bm}'
+    fig,ax = plt.subplots(1,2,figsize=(13,6))
+
+    c = np.array([1,-1])
+    Q_manual = op1.direct(VectorData(c))
+    plt.sca(ax[0])
+    plt.imshow(Q_manual.as_array(), origin='lower', cmap='gray')
+    plt.colorbar()
+    c_str = str(c[1:]).replace('[', '(').replace(']', ')')
+    plt.title(rf'$\boldsymbol{{c}} = {c_str}$')
+
+    Q = op1.direct(pdhg.solution)
+    plt.sca(ax[1])
+    plt.imshow(Q.as_array(), origin='lower', cmap='gray')
+    plt.colorbar()
+    rounded_c = [round(_, 3) for _ in pdhg.solution.as_array()[1:]]
+    c_str = str(rounded_c).replace('[', '(').replace(']', ')')
+    plt.title(rf'TV minimizer: $\boldsymbol{{c}} = {c_str}$')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_ESC_sol_comparisons.pdf'))
+    plt.show()
+    #############
+
+def esc_shapes_2(): # try with multiple bases
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    
+    data = load_centre('X20.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+
+    filepath = os.path.join(base_dir,'test_images/test_image_shapes3.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_circles.png')
+    # filepath = os.path.join(base_dir,'test_images/esc_geom.png')
+    im_arr = io.imread(filepath)
+    im_arr = color.rgb2gray(im_arr) > 0
+
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    A = ProjectionOperator(ig, ag, 'Siddon', device='gpu')
+    mu = 10 / (ig.voxel_num_x*ig.voxel_size_x) # scale to 1 mm
+    # mu = 40 / (ig.voxel_num_x*ig.voxel_size_x)
+    data = mu*A.direct(im)
+    data.reorder('tigre')
+    recon_P = FDK(data, image_geometry=ig).run(verbose=0)
+    show2D(recon_P)
+
+    ### Scatter simulation
+    I_P = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    # factor = [5,20,40,100,200][2]
+    # basis_params = [[0.15*1/factor,0,factor]]
+
+    # factors = [40,100]
+    factors = [60]
+    basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+    # I_S = 0.05*I_S*3
+    # I_S = 0.05*I_S*3
+    I = I_P + I_S_sum
+
+    basis_idx = 0
+    idx = 0
+
+    ########################
+    fig,ax = plt.subplots(figsize=(8,5))
+    plt.sca(ax)
+    plt.plot(I_P[idx,:],label=r'$I_P$')
+    # plt.plot(I_S[basis_idx,idx,:],label=r'$I_S$')
+    plt.plot(I_S_sum[idx,:],label=r'$I_S$')
+    # plt.plot(I[idx,:],label=r'I=I_P+I_S')
+    plt.grid(True)
+    plt.legend()
+    plt.title('Projection with simulated scatter')
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_scatter_proj.png'))
+    plt.show()
+    #####################
+
+    data_scatter = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I, dtype=np.float32), geometry=ag))
+    recon = FDK(data_scatter, image_geometry=ig).run(verbose=0)
+
+    ####################
+    fig,ax = plt.subplots(2, 1, gridspec_kw={'height_ratios': [4, 1]}, figsize=(8,10))
+    plt.sca(ax[0])
+    im0 = plt.imshow(recon.as_array(), origin='lower', cmap='gray')#,vmin=-10, vmax=10)
+    # plt.imshow(recon.as_array(), origin='lower', cmap='gray')
+    plt.xlabel('horizontal_x')
+    plt.ylabel('horizontal_y')
+    plt.title(r'Reconstruction of $-\ln(I_P+I_S)$')
+    plt.colorbar()
+    # plt.colorbar(im0,fraction=0.046, pad=0.04)
+
+    plt.sca(ax[1])
+    hori_x,hori_y = 700,650
+
+    plt.plot(recon.as_array()[:,hori_x]) # horizontal_x fixed
+    plt.title(f'Intensity profile for horizontal_x={hori_x} on the reconstruction')
+    plt.xlabel('horizontal_y')
+
+    # plt.plot(recon.as_array()[hori_y,:]) # horizontal_y fixed
+    # plt.title(f'Intensity profile for horizontal_y={hori_y} on the reconstruction')
+    # plt.xlabel('horizontal_x')
+    
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_scatter_recon.pdf'))
+    plt.show()
+    ####################
+    
+    P = recon.as_array()
+    b = data_scatter.as_array()
+    ny,nx = ig.shape
+
+    ### ESC step
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+
+    # factor = [5,20,40,100,200][2]
+    # basis_params = [[0.15*1/factor,0,factor]]
+    # basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    # factors = [40,100]
+    factors = [60]
+    basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    trans = I
+    nc = len(basis_params)
+
+    basis_idx = 0
+    if False:
+        ### approximation (real world data)
+        I_S = compute_scatter_basis(b,basis_params)
+        I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+        # I_S = 0.05*I_S
+        # I_Q = trans-I_S
+        I_Q = I - I_S_sum
+        s = b[None,:,:] + np.log(I_Q)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.grid(True)
+        plt.show()
+        ###
+    else:
+        ### what the model is based on
+        I_S = compute_scatter_basis(-np.log(I_P),basis_params)
+        I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+        # I_S = 0.05*I_S
+        # I_Q = trans-I_S
+        I_Q = I - I_S_sum
+        s = -np.log(I_S+I_P) + np.log(I_P)
+        plt.plot(I_P[idx,:],label='I_P')
+        plt.plot(I_Q[idx,:],label='I_Q')
+        plt.plot(I[idx,:],label='I=I_P+I_S')
+        plt.legend()
+        plt.title(f'basis_idx: {basis_idx}')
+        plt.grid(True)
+        plt.show()
+        ###
+
+    # print(np.unravel_index(s.argmax(),s.shape), np.max(s))
+
+    # fig,ax = plt.subplots(1,2,figsize=(10,5))
+    # plt.title(f'basis_idx: {basis_idx}')
+    # plt.sca(ax[0])
+    # plt.plot(s[basis_idx,idx,:],label='s')
+    # plt.legend()
+
+    # plt.sca(ax[1])
+    # plt.plot(-np.log(-s[basis_idx,idx,:]),label='-ln(-s)')
+    # plt.legend()
+    # plt.show()
+
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        # show2D(-S[i])
+        show2D(S[i],title=f'S_{i}')
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = S.reshape(nc, nx*ny).T
+
+    vg = VectorGeometry(length=nc+1)
+    op1 = ESCMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
+    op2 = GradientOperator(domain_geometry=ig)
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    # F = MixedL11Norm()
+    # F = SmoothMixedL21Norm(epsilon=1e-2)
+
+    cext = VectorData(array=np.hstack((1,np.full(nc, 0.1, dtype=np.float32))), geometry=vg)
+
+    l = -np.inf*np.ones(1+nc)
+    l[0] = 1
+    u = np.inf*np.ones(1+nc)
+    u[0] = 1
+    G = IndicatorBox(lower=l,upper=u)
+    upd_int = 3
+    pdhg = PDHG(f=F, g=G, operator=K, initial=cext, max_iteration=1000, update_objective_interval=3)
+    # pdhg.run(iterations=150)
+    pdhg.run(iterations=34)
+
+    print(pdhg.solution.as_array())
+    Q = op1.direct(pdhg.solution)
+    show2D(Q, title=f"c_ext={pdhg.solution.as_array()}")
+    show1D(Q, [('horizontal_x',hori_x)], title=f'horizontal_x={hori_x}', size=(8,3))
+    # show1D(Q, [('horizontal_y',hori_y)], title=f'horizontal_y={hori_y}', size=(8,3))
+
+    F(op2.direct(op1.direct(pdhg.solution)))
+    F(op2.direct(op1.direct(VectorData(np.array([1,0])))))
+    F(op2.direct(op1.direct(VectorData(np.array([1,-4.47])))))
+
+    c = np.array([1,-4.47])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+
+    c = np.array([1,-1])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+    show1D(op1.direct(VectorData(c)), [('horizontal_x',hori_x)], title=f'horizontal_x={hori_x}', size=(8,3))
+
+    def total_variation1(image):
+        diff1 = np.diff(image, axis=0)
+        diff2 = np.diff(image, axis=1)
+        tv = np.sum(np.abs(diff1)) + np.sum(np.abs(diff2))
+        return tv
+    
+    def total_variation2(image):
+        dx = np.diff(image, axis=0)
+        dy = np.diff(image, axis=1)
+        dx = np.pad(dx, ((0, 1), (0, 0)), 'constant')
+        dy = np.pad(dy, ((0, 0), (0, 1)), 'constant')
+        tv = np.sum(np.sqrt(dx**2 + dy**2))
+        return tv
+
+    ##########
+    plt.rcParams.update({'font.size': 16})
+    vs = np.arange(-2.0,4.0,0.1)
+    # vs = np.arange(-100,100,0.5)
+    fs = np.zeros(vs.shape)
+    for i,v in enumerate(vs):
+        fs[i] = F(op2.direct(op1.direct(VectorData(np.array([1,v])))))
+    
+    fig,ax = plt.subplots(figsize=(8,5)); plt.sca(ax)
+    plt.plot(vs,fs, color='black')
+    plt.xlabel(r'$c_1$')
+    plt.ylabel(r'Objective value')
+    plt.plot(pdhg.solution.as_array()[1], pdhg.objective[-1], label='Minimizer',
+        marker=".", markersize=15, color='red', linestyle='None')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_obj_curve.pdf'))
+    plt.show()
+    plt.rcParams.update({'font.size': 12})
+
+    ##########
+    plt.rcParams.update({'font.size': 16})
+    import matplotlib as mpl
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{bm}'
+    fig,ax = plt.subplots(1,2,figsize=(13,6))
+
+    c = np.array([1,-1])
+    Q_manual = op1.direct(VectorData(c))
+    plt.sca(ax[0])
+    plt.imshow(Q_manual.as_array(), origin='lower', cmap='gray')
+    plt.colorbar()
+    c_str = str(c[1:]).replace('[', '(').replace(']', ')')
+    plt.title(rf'$\boldsymbol{{c}} = {c_str}$')
+
+    Q = op1.direct(pdhg.solution)
+    plt.sca(ax[1])
+    plt.imshow(Q.as_array(), origin='lower', cmap='gray')
+    plt.colorbar()
+    rounded_c = [round(_, 3) for _ in pdhg.solution.as_array()[1:]]
+    c_str = str(rounded_c).replace('[', '(').replace(']', ')')
+    plt.title(rf'TV minimizer: $\boldsymbol{{c}} = {c_str}$')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_ESC_sol_comparisons.pdf'))
+    plt.show()
+    #############
+
+def esc_X20():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 12})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    data = load_centre('X20_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data, image_geometry=ig).run(verbose=0)
+
+    I = AbsorptionTransmissionConverter()(data).as_array()
+    b = data.as_array()
+    ny,nx = ig.shape
+    P = recon.as_array()
+
+    ### ESC step
+    # basis_params = [[1/5,0,5],[1/10,0,10],[1/40,0,40]]
+
+    # factor = [5,20,40,100,200][2]
+    # basis_params = [[0.15*1/factor,0,factor]]
+    # basis_params = [[0.15*1/factor,0,factor] for factor in factors]
+
+    # factors = [40,100]
+    factors = [40]
+    basis_params = [[0.05*1/factor,0,factor] for factor in factors]
+
+    trans = I
+    nc = len(basis_params)
+
+    idx = 800
+    basis_idx = 0
+    ### approximation (real world data)
+    I_S = compute_scatter_basis(b,basis_params)
+    I_S_sum = np.sum(I_S,axis=0)/len(basis_params)
+    # I_S = 0.05*I_S
+    # I_Q = trans-I_S
+    I_Q = I - I_S_sum
+    s = b[None,:,:] + np.log(I_Q)
+    plt.plot(I_S_sum[idx,:],label='I_S')
+    plt.plot(I[idx,:],label='I')
+    plt.legend()
+    plt.title(f'basis_idx: {basis_idx}')
+    plt.grid(True)
+    plt.show()
+
+    idx = 1120
+    fig,ax = plt.subplots(figsize=(8,5))
+    plt.sca(ax)
+    plt.plot(I[idx,:],label=r'$I$')
+    # plt.plot(I_S[basis_idx,idx,:],label=r'$I_S$')
+    plt.plot(I_S_sum[idx,:],label=r'$I_S$')
+    # plt.plot(I[idx,:],label=r'I=I_P+I_S')
+    plt.grid(True)
+    plt.legend()
+    plt.title('Projection from X20 with scatter estimation')
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_scatter_proj.png'))
+    plt.show()
+
+    print(np.unravel_index(s.argmax(),s.shape), np.max(s))
+
+    # fig,ax = plt.subplots(1,2,figsize=(10,5))
+    # plt.title(f'basis_idx: {basis_idx}')
+    # plt.sca(ax[0])
+    # plt.plot(s[basis_idx,idx,:],label='s')
+    # plt.legend()
+
+    # plt.sca(ax[1])
+    # plt.plot(-np.log(-s[basis_idx,idx,:]),label='-ln(-s)')
+    # plt.legend()
+    # plt.show()
+
+    S = np.zeros((nc,*ig.shape))
+    for i in range(nc):
+        data_s_i = AcquisitionData(array=np.array(s[i], dtype='float32'), geometry=ag)
+        S[i] = FDK(data_s_i).run(verbose=0).as_array()
+        # show2D(-S[i])
+        show2D(S[i],title=f'S_{i}')
+
+    Mext = np.zeros((nx*ny,nc+1))
+    Mext[:,0] = P.flatten()
+    Mext[:,1:] = S.reshape(nc, nx*ny).T
+
+    vg = VectorGeometry(length=nc+1)
+    op1 = ESCMatrixOperator(Mext, domain_geometry=vg, range_geometry=ig)
+    op2 = GradientOperator(domain_geometry=ig)
+    K = CompositionOperator(op2,op1)
+    F = MixedL21Norm()
+    # F = MixedL11Norm()
+    # F = SmoothMixedL21Norm(epsilon=1e-2)
+
+    cext = VectorData(array=np.hstack((1,np.full(nc, 0.1, dtype=np.float32))), geometry=vg)
+
+    l = -np.inf*np.ones(1+nc)
+    l[0] = 1
+    u = np.inf*np.ones(1+nc)
+    u[0] = 1
+    G = IndicatorBox(lower=l,upper=u)
+    upd_int = 3
+    pdhg = PDHG(f=F, g=G, operator=K, initial=cext, max_iteration=1000, update_objective_interval=3)
+    # pdhg.run(iterations=150)
+    # pdhg.run(iterations=34)
+    pdhg.run(iterations=30)
+
+    print(pdhg.solution.as_array())
+    Q = op1.direct(pdhg.solution)
+    show2D(Q, title=f"c_ext={pdhg.solution.as_array()}")
+
+    F(op2.direct(op1.direct(pdhg.solution)))
+    F(op2.direct(op1.direct(VectorData(np.array([1,0])))))
+    F(op2.direct(op1.direct(VectorData(np.array([1,-4.47])))))
+
+    c = np.array([1,-10*0])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+
+    c = np.array([1,-1])
+    show2D(op1.direct(VectorData(c)),title=f"c_ext={c}")
+
+    ##########
+    plt.rcParams.update({'font.size': 16})
+    vs = np.arange(-2.0,4.0,0.1)
+    # vs = np.arange(-100,100,0.5)
+    fs = np.zeros(vs.shape)
+    for i,v in enumerate(vs):
+        fs[i] = F(op2.direct(op1.direct(VectorData(np.array([1,v])))))
+    
+    fig,ax = plt.subplots(figsize=(8,5)); plt.sca(ax)
+    plt.plot(vs,fs, color='black')
+    plt.xlabel(r'$c_1$')
+    plt.ylabel(r'Objective value')
+    plt.plot(pdhg.solution.as_array()[1], pdhg.objective[-1], label='Minimizer',
+        marker=".", markersize=15, color='red', linestyle='None')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_obj_curve.pdf'))
+    plt.show()
+    plt.rcParams.update({'font.size': 12})
+    
+    ##########
+    imshow_kwargs = {
+        'origin': 'lower',
+        'cmap': 'gray'
+        # ,'vmin': -1.2,
+        # 'vmax': 1.2
+    }
+    
+    slice_y = slice(350,700)
+    plt.rcParams.update({'font.size': 16})
+    import matplotlib as mpl
+    mpl.rcParams['text.latex.preamble'] = r'\usepackage{bm}'
+    fig,ax = plt.subplots(3,1,figsize=(9,12))
+
+    c = np.array([1,-3])
+    Q_manual = op1.direct(VectorData(c))
+    plt.sca(ax[0])
+    plt.imshow(Q_manual.as_array()[slice_y], **imshow_kwargs)
+    plt.colorbar()
+    c_str = str(c[1:]).replace('[', '(').replace(']', ')')
+    plt.title(rf'$\boldsymbol{{c}} = {c_str}$')
+
+    c = np.array([1,0])
+    Q_manual = op1.direct(VectorData(c))
+    plt.sca(ax[1])
+    plt.imshow(Q_manual.as_array()[slice_y], **imshow_kwargs)
+    plt.colorbar()
+    c_str = str(c[1:]).replace('[', '(').replace(']', ')')
+    plt.title(rf'$\boldsymbol{{c}} = {c_str}$')
+
+    Q = op1.direct(pdhg.solution)
+    plt.sca(ax[2])
+    plt.imshow(Q.as_array()[slice_y], **imshow_kwargs)
+    plt.colorbar()
+    rounded_c = [round(_, 3) for _ in pdhg.solution.as_array()[1:]]
+    c_str = str(rounded_c).replace('[', '(').replace(']', ')')
+    plt.title(rf'TV minimizer: $\boldsymbol{{c}} = {c_str}$')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_ESC_sol_comparisons.pdf'))
+    plt.show()
+    #############
+
+    show2D(-S[0])
+    S_seg = clip_otsu_segment(-S[0], ig, clip=0)
+    show2D(S_seg)
+
+    imshow_kwargs = {
+        'origin': 'lower',
+        'cmap': 'gray'
+        # ,'vmin': -0.4,
+        # 'vmax': 0.8
+    }
+    fig,ax = plt.subplots(3,1,figsize=(9,12))
+
+    plt.sca(ax[0])
+    plt.imshow(S[0][slice_y], origin='lower', cmap='gray')
+    plt.colorbar()
+    plt.title(rf'$\boldsymbol{{S}}_1$')
+
+    plt.sca(ax[1])
+    plt.imshow(-S[0][slice_y], **imshow_kwargs)
+    plt.colorbar()
+    plt.title(rf'$-\boldsymbol{{S}}_1$')
+
+    plt.sca(ax[2])
+    plt.imshow(recon.as_array()[slice_y], **imshow_kwargs)
+    plt.colorbar()
+    plt.title(rf'$\boldsymbol{{Q}}$')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_ESC_basis.pdf'))
+    plt.show()
+
+    ###########
+    c = np.array([1,-5])
+    recon_cor = op1.direct(VectorData(c))
+    show2D(recon_cor,title=f"c_ext={c}")
+
+    data_cor = b + np.sum(c[:,None,None]*I_S, axis=0)
+    data_cor = AcquisitionData(array=np.array(data_cor, dtype='float32'), geometry=ag)
+
+    segmentation = clip_otsu_segment(recon_cor.as_array(), ig, clip=0)
+    path_lengths = A.direct(segmentation)
+
+    mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+    def f_poly1(x, *a):
+        return a[0]*x**3
+    def f_poly2(x, *a):
+        return a[0]*x**5
+    
+    shift = 0.05
+    const = np.log10(shift)
+    def f_poly3(x, *a):
+        # return a[0]*np.log10(x+0.1) + 1
+        # return 10**((x-1)/a[0])-0.1
+        return 10**((x+const)/a[0]) - shift
+
+    bhc = BHC(path_lengths, data, None, f_poly1, num_bins=100, mask=mask, n_poly=1)
+    bhc.run()
+    ########
+
+def disk_sino():
+    physical_size = 1
+    voxel_num = 1000
+    ag,ig = setup_generic_cil_geometry(physical_size=1,voxel_num=voxel_num)
+    # im_arr = create_circle_image(image_size=voxel_num, radius=voxel_num//5, center=[voxel_num//2, voxel_num//2])
+    im_arr = create_circle_image(image_size=voxel_num, radius=voxel_num//6, center=[voxel_num//4, voxel_num//4])
+    im = ImageData(array=im_arr.astype('float32'), geometry=ig)
+    
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    data = A.direct(im)
+    recon = FBP(data, image_geometry=ig).run(verbose=0)
+    show2D(recon)
+    show2D(data)
