@@ -93,12 +93,14 @@ def spectrum_penetration_plot():
     plt.xlabel(r'$E$ [keV]')
     plt.title(r'Normalized X-ray spectrum histograms at different path lengths $d$')
     plt.legend()
-    plt.savefig(os.path.join(base_dir, 'plots/spectrum_snapshots.pdf'))
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/spectrum_snapshots.pdf'))
     plt.show()
     print(np.sum(I_E[:,0]))
     print(np.sum(I_E[:,2]))
 
 def random_plot():
+    # For testing plt tex capabilities
     from matplotlib import rc
     import matplotlib
     d = np.linspace(0, 10, 100)  # Replace with your actual data
@@ -747,7 +749,7 @@ def bh_shapes():
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.85)
-    plt.savefig(os.path.join(base_dir, 'plots/bh_shapes.pdf'))
+    # plt.savefig(os.path.join(base_dir, 'plots/bh_shapes.pdf'))
     plt.show()
 
 def bh_shapes_v2():
@@ -763,6 +765,12 @@ def bh_shapes_v2():
     recon = FBP(b, image_geometry=ig).run(verbose=0)
 
 ############# Plotting
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 16})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+
     from matplotlib.gridspec import GridSpec,GridSpecFromSubplotSpec
     fig = plt.figure(figsize=(10,18))
     gs = GridSpec(4, 1, height_ratios=[4, 4, 1, 1])
@@ -1006,6 +1014,7 @@ def compare_otsu_segmentation():
     plt.savefig(os.path.join(base_dir, 'plots/X20_initial_hist.pdf'))
     plt.show()
 
+
 def compare_BHC_fits():
     from matplotlib import rc
     plt.rcParams.update({'font.size': 14})
@@ -1107,8 +1116,11 @@ def compare_BHC_fits():
     figsize = [(9,12)][0]
     fig, ax = plt.subplots(3,1, figsize=figsize)
 
+    kwargs = {}
+
     hori_x_slice = slice(300,750)
     plt.sca(ax[0])
+    # plt.imshow(recon1.as_array()[hori_x_slice], origin='lower', cmap='gray')
     plt.imshow(recon1.as_array()[hori_x_slice], origin='lower', cmap='gray')
     # plt.xlabel('horizontal_x')
     # plt.ylabel('horizontal_y')
@@ -1124,6 +1136,55 @@ def compare_BHC_fits():
 
     plt.sca(ax[2])
     plt.imshow(recon3.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(rf'FDK reconstruction from $f_p=10^{{(x+\log_{{10}}({shift}))/c}} - {shift}$')
+    plt.colorbar()
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_poly_recons.pdf'))
+    plt.show()
+
+    ########### with raw FDK as well
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 16})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+    # figsize = [(14,6), (12,5)][1]
+    figsize = [(9,16)][0]
+    fig, ax = plt.subplots(4,1, figsize=figsize)
+
+    im_args = {
+        'origin': 'lower', 'cmap': 'gray'
+        , 'vmin': -0.4, 'vmax': 0.8 # comment this out if automatic scales should be used
+    }
+
+    hori_x_slice = slice(300,750)
+    plt.sca(ax[0])
+    # plt.imshow(recon.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    plt.imshow(recon.as_array()[hori_x_slice], **im_args)
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'Raw FDK reconstruction')
+    plt.colorbar()
+
+    plt.sca(ax[1])
+    # plt.imshow(recon1.as_array()[hori_x_slice], origin='lower', cmap='gray')
+    plt.imshow(recon1.as_array()[hori_x_slice], **im_args)
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^3$')
+    plt.colorbar()
+
+    plt.sca(ax[2])
+    plt.imshow(recon2.as_array()[hori_x_slice], **im_args)
+    # plt.xlabel('horizontal_x')
+    # plt.ylabel('horizontal_y')
+    plt.title(r'FDK reconstruction from $f_p=cx^5$')
+    plt.colorbar()
+
+    plt.sca(ax[3])
+    plt.imshow(recon3.as_array()[hori_x_slice], **im_args)
     # plt.xlabel('horizontal_x')
     # plt.ylabel('horizontal_y')
     plt.title(rf'FDK reconstruction from $f_p=10^{{(x+\log_{{10}}({shift}))/c}} - {shift}$')
@@ -1318,7 +1379,8 @@ def photon_shapes_bhc():
     print(f'min count: {np.min(I_noisy)}')
 
     b = AcquisitionData(array=d*mu_eff, geometry=ag)
-    eps = 1e-10
+    eps = 1e-7
+    # eps = 1e-5
     b_noisy = TransmissionAbsorptionConverter()(AcquisitionData(array=np.array(I_noisy/I0+eps, dtype='float32'), geometry=ag))
     # b_noisy = AcquisitionData(array=np.array(-np.log(I_noisy/I0),dtype='float32'), geometry=ag)
     
@@ -1328,16 +1390,17 @@ def photon_shapes_bhc():
     plt.title('Noisy absorption data as function of ground truth path lengths')
     plt.grid(True)
     plt.xlabel('mm')
-    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_noisy_abs.png'))
+    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_noisy_abs.png'))
     plt.show()
 
     # recon = FBP(b, image_geometry=ig).run(verbose=0)
     # show2D(recon, title='recon')
     recon_noisy = FBP(b_noisy, image_geometry=ig).run(verbose=0)
-    show2D(recon_noisy, title='FBP reconstruction of noisy data')
+    show2D(recon_noisy, title='FBP reconstruction of noisy data', fix_range=(-75,150))
 
     tau = -np.log(eps)*0.9
-    tau = 7
+    # tau = 7
+    tau = 10
     b_interp = lin_interp_sino2D(b_noisy, tau)
     recon_interp = FBP(b_interp, image_geometry=ig).run(verbose=0)
     show2D(recon_interp, title='FBP reconstruction of interpolated noisy data')
@@ -1345,17 +1408,21 @@ def photon_shapes_bhc():
     ######
     fig, ax = plt.subplots(1, 2, figsize=(10, 7))
     
-    im0 = ax[0].imshow(recon_noisy.as_array(), cmap='gray', origin='lower')
+    im_args = {
+        'cmap': 'gray', 'origin': 'lower'
+        , 'vmin': -75.0, 'vmax': 150.0
+    }
+    im0 = ax[0].imshow(recon_noisy.as_array(), **im_args)
     ax[0].set_title('Noisy data')
     fig.colorbar(im0, ax=ax[0], location='bottom')
     
-    im1 = ax[1].imshow(recon_interp.as_array(), cmap='gray', origin='lower')
+    im1 = ax[1].imshow(recon_interp.as_array(), **im_args)
     ax[1].set_title('Interpolated noisy data')
     fig.colorbar(im1, ax=ax[1], location='bottom')
 
     fig.suptitle('FBP reconstructions', fontsize=16)
     plt.tight_layout()
-    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_recons.pdf'))
+    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_recons.pdf'))
     plt.show()
     #########
 
@@ -1373,7 +1440,7 @@ def photon_shapes_bhc():
     plt.xlabel('Intensity')
     plt.legend()
     plt.grid(True)
-    # plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_hists.pdf'))
+    plt.savefig(os.path.join(base_dir, 'plots/shapes_mono_hists.pdf'))
     plt.show()
 
     tau_noisy = threshold_otsu(recon_noisy.as_array())
@@ -1458,25 +1525,29 @@ def test_linear_interpolation():
     rc('text', usetex=True)
     rc('font', family='serif')
     recon = FDK(data).run(verbose=0)
-    fig,ax = plt.subplots(4,1,figsize=(9,16))
+    # fig,ax = plt.subplots(4,1,figsize=(9,16))
+    fig,ax = plt.subplots(2,1,figsize=(9,8))
     # fig,ax = plt.subplots(2,2,figsize=(14,8))
     hori_x_slice = slice(300,750)
     fix_range = (-0.15,0.6)
 
     plt.sca(ax.flatten()[0])
     plt.imshow(recon.as_array()[hori_x_slice],origin='lower',cmap='gray',vmin=fix_range[0],vmax=fix_range[1])
+    plt.colorbar()
     plt.title('Raw data')
 
-    for i,tau in enumerate([2.2,2.0,1.9]):
+    # for i,tau in enumerate([2.2,2.0,1.9]):
+    for i,tau in enumerate([1.9]):
         data_interp = lin_interp_sino2D(data, tau)
         recon_interp = FDK(data_interp).run(verbose=0)
         plt.sca(ax.flatten()[i+1])
         plt.imshow(recon_interp.as_array()[hori_x_slice],origin='lower',cmap='gray',vmin=fix_range[0],vmax=fix_range[1])
+        plt.colorbar()
         plt.title(rf'Linearly interpolated with $\tau = {tau}$')
     
     # plt.suptitle('FDK reconstructions', fontsize=24)
     plt.tight_layout()
-    plt.savefig(os.path.join(base_dir, 'plots/X20_interp.pdf'))
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_interp.pdf'))
     plt.show()
 
 def single_projections():
@@ -1756,9 +1827,14 @@ def X20_reg():
 
     N = len(alphas)
     fig,ax = plt.subplots(N,1,figsize=(9,16))
+    im_args = {
+        'origin': 'lower', 'cmap': 'gray'
+        , 'vmin': 0.0, 'vmax': 0.7 # comment this out if automatic scales should be used
+    }
     for i in range(N):
         plt.sca(ax.flatten()[i])
-        plt.imshow(solutions[i], origin='lower', cmap='gray')
+        # plt.imshow(solutions[i], origin='lower', cmap='gray')
+        plt.imshow(solutions[i], **im_args)
         plt.title(rf'NN+TV with $\alpha = {alphas[i]}$')
         plt.colorbar()
     plt.tight_layout()
@@ -1779,6 +1855,108 @@ def X20_reg():
     plt.tight_layout()
     # plt.savefig(os.path.join(base_dir, 'plots/X20_TV_conv.pdf'))
     plt.show()
+
+def X20_bhc_reg():
+    from matplotlib import rc
+    plt.rcParams.update({'font.size': 14})
+    rc('text', usetex=True)
+    rc('font', family='serif')
+
+    data = load_centre('X20_cor.pkl')
+    # data = load_centre('X16_cor.pkl')
+    ag = data.geometry
+    ig = ag.get_ImageGeometry()
+    A = ProjectionOperator(ig, ag, direct_method='Siddon', device='gpu')
+    recon = FDK(data).run(verbose=0)
+
+    ########### NN
+    F = LeastSquares(A, data)
+    G = IndicatorBox(lower=0.0)
+    # x0 = ig.allocate(0.1)
+    x0 = recon
+    NN = FISTA(f=F, g=G, initial=x0, 
+                    max_iteration=1000,
+                    update_objective_interval=10)
+    NN.run(100)
+    ################### bhc1NN
+    def f_poly1(x, *a):
+        return a[0]*x**3
+    def f_poly2(x, *a):
+        return a[0]*x**5
+    
+    recon_bhc = FDK(data).run()
+    for i in range(2):
+        segmentation = clip_otsu_segment(recon_bhc.as_array(), ig, clip=0)
+        path_lengths = A.direct(segmentation)
+        mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+        bhc = BHC(path_lengths, data, None, f_poly1, num_bins=100, mask=mask, n_poly=1)
+        data_bhc,recon_bhc = bhc.run(verbose=0)
+
+    ############# 
+    F = LeastSquares(A, data_bhc)
+    G = IndicatorBox(lower=0.0)
+    # x0 = ig.allocate(0.1)
+    x0 = recon
+    bhc1NN = FISTA(f=F, g=G, initial=x0, 
+                    max_iteration=1000,
+                    update_objective_interval=10)
+    bhc1NN.run(100)
+    show2D(bhc1NN.solution, fix_range=(0.0,0.4))
+    tau = threshold_otsu(bhc1NN.solution.as_array())
+    show2D(bhc1NN.solution > tau)
+
+    show2D([NN.solution,bhc1NN.solution], fix_range=(0.0,0.4))
+
+    ############ bhc2NN
+    recon_bhc = FDK(data).run()
+    for i in range(2):
+        segmentation = clip_otsu_segment(recon_bhc.as_array(), ig, clip=0)
+        path_lengths = A.direct(segmentation)
+        mask = (path_lengths.as_array() > 0.05) & (data.as_array() > 0.25)
+        bhc = BHC(path_lengths, data, None, f_poly2, num_bins=100, mask=mask, n_poly=1)
+        data_bhc,recon_bhc = bhc.run(verbose=0)
+
+    F = LeastSquares(A, data_bhc)
+    G = IndicatorBox(lower=0.0)
+    # x0 = ig.allocate(0.1)
+    x0 = recon
+    bhc2NN = FISTA(f=F, g=G, initial=x0, 
+                    max_iteration=1000,
+                    update_objective_interval=10)
+    bhc2NN.run(100)
+    show2D(bhc2NN.solution, fix_range=(0.0,0.4))
+    tau = threshold_otsu(bhc2NN.solution.as_array())
+    show2D(bhc2NN.solution > tau)
+
+    show2D([NN.solution,bhc2NN.solution], fix_range=(0.0,0.4))
+    #################
+    y_slice = slice(300,750)
+    im_args = {
+        'origin': 'lower', 'cmap': 'gray'
+        , 'vmin': 0.0, 'vmax': 0.4
+    }
+    fig,ax = plt.subplots(3,1,figsize=(9,12))
+
+    plt.sca(ax[0])
+    plt.imshow(NN.solution.as_array()[y_slice], **im_args)
+    plt.colorbar()
+    plt.title(rf'Raw data and NN constraints')
+
+    plt.sca(ax[1])
+    plt.imshow(bhc1NN.solution.as_array()[y_slice], **im_args)
+    plt.colorbar()
+    plt.title(rf'BHC with $f_p=cx^3$ and NN constraints')
+
+    plt.sca(ax[2])
+    plt.imshow(bhc2NN.solution.as_array()[y_slice], **im_args)
+    plt.colorbar()
+    plt.title(rf'BHC with $f_p=cx^5$ and NN constraints')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/X20_bhc_NN.pdf'))
+    plt.show()
+
+
 
 def backprojection_mask():
     file_path = os.path.join(base_dir,'centres/X20_cor.pkl')
@@ -2546,6 +2724,18 @@ def esc_shapes_2(): # try with multiple bases
     plt.show()
     #############
 
+    fig,ax = plt.subplots(1,1,figsize=(8,7))
+
+    plt.sca(ax)
+    plt.imshow(S[0], origin='lower', cmap='gray')
+    plt.colorbar()
+    plt.title(rf'$\boldsymbol{{S}}_1$')
+
+    plt.tight_layout()
+    # plt.savefig(os.path.join(base_dir, 'plots/shapes_ESC_basis.pdf'))
+    plt.show()
+    ###############
+
 def esc_X20():
     from matplotlib import rc
     plt.rcParams.update({'font.size': 12})
@@ -2688,10 +2878,9 @@ def esc_X20():
     
     ##########
     imshow_kwargs = {
-        'origin': 'lower',
-        'cmap': 'gray'
-        # ,'vmin': -1.2,
-        # 'vmax': 1.2
+        'origin': 'lower', 'cmap': 'gray'
+        # ,'vmin': -0.4, 'vmax': 0.8
+        ,'vmin': -0.6, 'vmax': 1.2
     }
     
     slice_y = slice(350,700)
